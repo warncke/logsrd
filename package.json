@@ -1,0 +1,21 @@
+{
+  "name": "logsrd",
+  "version": "0.0.1",
+  "description": "synchrounous replicated log server",
+  "main": "logsrd.mjs",
+  "scripts": {
+    "test": "mocha **/*.test.*js"
+  },
+  "dependencies": {
+    "chai": "^5.1.2",
+    "chai-as-promised": "^8.0.1",
+    "commander": "^12.1.0",
+    "mocha": "^11.0.1",
+    "mz": "^2.7.0",
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.51.0"
+  },
+  "devDependencies": {
+    "@types/mz": "^2.7.8",
+    "@types/node": "^22.10.1"
+  }
+}
