@@ -1,4 +1,4 @@
-import CommandLogEntry, { CommandName } from "./entry/command-log-entry";
+import CommandCreateLog from "./entry/command/create-log-command";
 import LogConfig from "./log-config";
 import LogId from "./log-id";
 import Persist from "./persist";
@@ -27,7 +27,7 @@ export default class PersistLog {
     }
 
     async create() {
-        this.persist.hotLog.append(this.logId, new CommandLogEntry(CommandName.CREATE_LOG, JSON.stringify(this.config)))
+        this.persist.hotLog.append(this.logId, new CommandCreateLog({value: this.config}))
     }
 
     async delete(): Promise<boolean> {

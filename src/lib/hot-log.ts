@@ -28,7 +28,10 @@ export default class HotLog {
             this.writeQueue = new WriteQueue()
         }
         const done = this.writeQueue.push({logId, entry})
-        if (!this.writeInProgress) LogWriter.write(this)
+        if (!this.writeInProgress) LogWriter.write(this).catch(err => {
+            // TODO: HANDLE ERROR!
+            console.error(err)
+        })
         await this.writeQueue.promise
     }
 
