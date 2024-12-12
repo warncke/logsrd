@@ -25,4 +25,8 @@ export default class U32CommandType extends CommandLogEntry {
     value(): number {
         return new Uint32Array(this.commandValueU8.buffer)[0]
     }
+
+    setValue(value: number): void {
+        this.commandValueU8 = new Uint8Array(new Uint32Array([value]).buffer)
+    }
 }

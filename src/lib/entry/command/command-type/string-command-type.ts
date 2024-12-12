@@ -25,4 +25,8 @@ export default class StringCommandType extends CommandLogEntry {
     value(): string {
         return new TextDecoder().decode(this.commandValueU8)
     }
+
+    setValue(value: string): void {
+        this.commandValueU8 = new TextEncoder().encode(value)
+    }
 }

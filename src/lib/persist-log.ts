@@ -22,15 +22,16 @@ export default class PersistLog {
         this.persist = persist
     }
 
-    async init() {
-
-    }
-
-    async create() {
-        this.persist.hotLog.append(this.logId, new CommandCreateLog({value: this.config}))
-    }
-
     async delete(): Promise<boolean> {
         return false
+    }
+
+    static async create({ config, logId, persist }: { config: LogConfig, logId: LogId, persist: Persist }) {
+        await persist.hotLog.append(logId, new CommandCreateLog({value: config}))
+        return new PersistLog({ config, logId, persist })
+    }
+
+    static async init({ logId, persist }: { logId: LogId, persist: Persist }): Promise<PersistLog|null> {
+        return null
     }
 }

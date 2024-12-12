@@ -1,4 +1,5 @@
-import LogEntry, { EntryType } from "../log-entry";
+import LogEntry from "../log-entry";
+import { EntryType } from "../types";
 
 const TYPE_BYTE = new Uint8Array([EntryType.JSON])
 

@@ -124,6 +124,7 @@ export default class Persist {
     config: PersistConfig
     coldLog: ColdLog
     hotLog: HotLog
+    openLogs: Map<string, PersistLog>
 
     constructor(config: PersistConfig) {
         config.coldLogFileName = config.coldLogFileName || DEFAULT_COLD_LOG_FILE_NAME
@@ -135,6 +136,7 @@ export default class Persist {
         this.hotLog = new HotLog({
             logFile: path.join(this.config.dataDir, config.hotLogFileName),
         })
+        this.openLogs = new Map();
     }
 
     async init(): Promise<void> {
@@ -145,14 +147,19 @@ export default class Persist {
     }
 
     async createLog({ config }: { config: LogConfig }): Promise<PersistLog> {
-        const pLog = new PersistLog({ config, logId: config.logId, persist: this })
-        await pLog.create()
-        return pLog
+        return PersistLog.create({ config, logId: config.logId, persist: this })
     }
 
     async openLog({ logId }: { logId: LogId }): Promise<PersistLog|null> {
-        const pLog = new PersistLog({ logId, persist: this })
-        await pLog.init()
+        if (this.openLogs.has(logId.base64())) {
+            return this.openLogs.get(logId.base64()) || null;
+        }
+        const pLog = await PersistLog.init({ logId, persist: this })
+        // init will return false if the log does not exist
+        if (pLog === null) {
+            return null
+        }
+        this.openLogs.set(logId.base64(), pLog);
         return pLog
     }
 

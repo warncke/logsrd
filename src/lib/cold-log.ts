@@ -25,6 +25,6 @@ export default class ColdLog {
     }
 
     async init(): Promise<void> {
-        const stat = await fs.stat(this.logFile)
+        // const stat = await fs.stat(this.logFile)
     }
 }

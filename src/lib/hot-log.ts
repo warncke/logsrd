@@ -2,7 +2,7 @@ import fs, { FileHandle } from 'node:fs/promises'
 
 import LogEntry from './log-entry'
 import LogId from './log-id'
-import LogWriter from './log-writer'
+import GlobalLogWriter from './global-log-writer'
 import WriteQueue from './write-queue'
 
 export default class HotLog {
@@ -28,14 +28,15 @@ export default class HotLog {
             this.writeQueue = new WriteQueue()
         }
         const done = this.writeQueue.push({logId, entry})
-        if (!this.writeInProgress) LogWriter.write(this).catch(err => {
+        const promise = this.writeQueue.promise
+        if (!this.writeInProgress) GlobalLogWriter.write(this).catch(err => {
             // TODO: HANDLE ERROR!
             console.error(err)
         })
-        await this.writeQueue.promise
+        await promise
     }
 
     async init(): Promise<void> {
-        const stat = await fs.stat(this.logFile)
+        // const stat = await fs.stat(this.logFile)
     }
 }

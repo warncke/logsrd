@@ -1,3 +1,5 @@
+import 'core-js/actual/typed-array/to-base64'
+
 import Log from './log';
 import LogConfig from './log-config';
 import LogId from './log-id';
@@ -9,30 +11,29 @@ export type ServerConfig = {
 
 export default class Server {
     config: ServerConfig
-    openLogs: Map<string, Log>
     persist: Persist
 
     constructor({ config, persist }: { config: ServerConfig, persist: Persist }) {
         this.config = config
-        this.openLogs = new Map();
         this.persist = persist;
     }
 
-    async createLog({ config }: { config: LogConfig }): Promise<Log|null> {
-        const pLog = await this.persist.createLog({ config });
-        if (pLog === null) {
+    async createLog({ config }: { config: any }): Promise<LogConfig|null> {
+        const log = await Log.create({ config, server: this })
+        if (log === null) {
             return null
         }
-        return new Log({ persist: pLog });
+        else {
+            return log.persist.config
+        }
     }
 
     async deleteLog(logId: LogId): Promise<boolean> {
-        const log = await this.openLog(logId)
+        const log = await this.getLog(logId)
         if (log === null) {
             return false
         }
-        if (await log.persist.delete()) {
-            this.closeLog(logId)
+        if (await log.delete()) {
             return true
         }
         else {
@@ -41,24 +42,10 @@ export default class Server {
     }
 
     async getLog(logId: LogId): Promise<Log | null> {
-        if (this.openLogs.has(logId.base64())) {
-            return this.openLogs.get(logId.base64()) || null;
-        }
-
-        return this.openLog(logId);
-    }
-
-    async openLog(logId: LogId): Promise<Log | null> {
-        const pLog = await this.persist.openLog(logId);
+        const pLog = await this.persist.openLog({ logId });
         if (pLog === null) {
             return null;
         }
-        const newLog = new Log({ persist: pLog });
-        this.openLogs.set(logId.base64(), newLog);
-        return newLog;
-    }
-
-    async closeLog(logId: LogId): Promise<void> {
-        this.openLogs.delete(logId.base64());
+        return new Log({ persist: pLog });
     }
 }

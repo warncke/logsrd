@@ -29,4 +29,9 @@ export default class JSONCommandType extends CommandLogEntry {
         const text = new TextDecoder().decode(this.commandValueU8)
         return JSON.parse(text)
     }
+
+    setValue(value: any): void {
+        const jsonString = typeof value === "string" ? value : JSON.stringify(value)
+        this.commandValueU8 = new TextEncoder().encode(jsonString)
+    }
 }

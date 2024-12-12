@@ -3,7 +3,7 @@ import { FileHandle } from 'node:fs/promises';
 
 class LogId {
     #base64: string | null = null;
-    logId: any;
+    logId: Uint8Array;
 
     constructor(logId: Uint8Array) {
         this.logId = logId;
@@ -12,7 +12,8 @@ class LogId {
     base64(): string {
         return this.#base64 !== null
             ? this.#base64
-            : (this.#base64 = this.logId.toBase64({ alphabet: 'base64url', padding: false }));
+            // TODO: browser compatibility
+            : (this.#base64 = Buffer.from(this.logId).toString('base64url'))
     }
 
     byteLength() {
@@ -23,9 +24,14 @@ class LogId {
         return [this.logId];
     }
 
+    toJSON() {
+        return this.base64()
+    }
+
     static async newRandom(): Promise<LogId> {
         // generate new random id
-        return new LogId(await crypto.randomBytes(64));
+        // TODO: browser compatibility
+        return new LogId(await crypto.randomBytes(16));
     }
 }
 
