@@ -10,6 +10,7 @@ export default class HotLog {
     logs: Map<string, Array<number>> = new Map()
     fh: FileHandle|null = null 
     logFile: string
+    length: number = 0
     // while the writing of queued writes is in progress this will be set
     // to the current queue being written
     writeInProgress: WriteQueue|null = null
@@ -23,9 +24,12 @@ export default class HotLog {
     }
 
     async append(logId: LogId, entry: LogEntry): Promise<void> {
-        const done = this.writeQueue!.push(logId, entry)
+        if (this.writeQueue === null) {
+            this.writeQueue = new WriteQueue()
+        }
+        const done = this.writeQueue.push({logId, entry})
         if (!this.writeInProgress) LogWriter.write(this)
-        await done
+        await this.writeQueue.promise
     }
 
     async init(): Promise<void> {

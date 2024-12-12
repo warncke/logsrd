@@ -1,4 +1,5 @@
 import crypto from 'mz/crypto';
+import { FileHandle } from 'node:fs/promises';
 
 class LogId {
     #base64: string | null = null;
@@ -12,6 +13,14 @@ class LogId {
         return this.#base64 !== null
             ? this.#base64
             : (this.#base64 = this.logId.toBase64({ alphabet: 'base64url', padding: false }));
+    }
+
+    byteLength() {
+        return this.logId.byteLength;
+    }
+
+    u8s(): Uint8Array[] {
+        return [this.logId];
     }
 
     static async newRandom(): Promise<LogId> {

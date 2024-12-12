@@ -83,18 +83,13 @@ import PersistLog from './persist-log';
  * LogEntries are written to logs framed by bytes indicating entry length at the beginning and
  * end of the entry data.
  * 
- * | Length Byte | Length Byte? | Log Entry Data | Length Byte? | Length Byte |
+ * | Length (2) Bytes | Log Entry Data | Length (2) Bytes |
  * 
- * Length is encoded using variable length integer encoding of a big endian unsigned integer.
- * If the first bit is 1 then it is a 2-byte number, with the remaining 15 bits being the
- * number. If the first bit is 0 then it is a 1-byte number with the remaining 7 bits being
- * the number.
+ * Length is encoded using a little endian unsigned 16bit integer. The maximum value for length
+ * is 65,535.
  * 
- * The maximum length for a log entry is 32,765, while the maximum length with a single-byte
- * length is 127.
- * 
- * Log entries larger than 32,765 bytes are stored as pageSize aligned blobs and then the entry
- * is written to the log as the blobId + any remaining data that does not fill a page.
+ * Log entries are currently limited to 32KB (32,768 bytes). Storage for larger log entries in an
+ * off-log blob store is planned.
  * 
  * The first entry in every log is the CREATE_LOG entry which contains the initial configuration.
  * 

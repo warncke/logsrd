@@ -10,6 +10,15 @@ export default class BinaryLogEntry extends LogEntry {
         this.u8 = u8
     }
 
+    byteLength(): number {
+        // entry length is: 1 byte entry type + u8.byteLength
+        return 1 + this.u8.byteLength
+    }
+
+    u8s(): Uint8Array[] {
+        return [ TYPE_BYTE, this.u8 ]
+    }
+
     static fromU8(u8: Uint8Array): BinaryLogEntry {
         return new BinaryLogEntry(u8)
     }

@@ -32,6 +32,14 @@ export default class LogEntry {
     constructor() {
     }
 
+    u8s(): Uint8Array[] {
+        return []
+    }
+
+    byteLength(): number {
+        return 0
+    }
+
     static fromU8(u8: Uint8Array): LogEntry {
         const entryType: number|undefined = u8.at(0);
 
