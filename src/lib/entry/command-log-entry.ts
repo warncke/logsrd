@@ -27,8 +27,8 @@ const COMMAND_CLASS: { [index: number]: COMMAND_CLASSES} = {
 }
 
 export default class CommandLogEntry extends LogEntry {
-    #commandNameU8: Uint8Array
-    #commandValueU8: Uint8Array
+    commandNameU8: Uint8Array
+    commandValueU8: Uint8Array
 
     constructor({
         commandNameU8,
@@ -38,17 +38,17 @@ export default class CommandLogEntry extends LogEntry {
         commandValueU8: Uint8Array
     }) {
         super()
-        this.#commandNameU8 = commandNameU8
-        this.#commandValueU8 = commandValueU8
+        this.commandNameU8 = commandNameU8
+        this.commandValueU8 = commandValueU8
     }
 
     byteLength(): number {
         // entry length is: 1 byte entry type + 1 byte command name + command.length
-        return 2 + this.#commandValueU8.byteLength
+        return 2 + this.commandValueU8.byteLength
     }
 
     u8s(): Uint8Array[] {
-        return [ TYPE_BYTE,this.#commandNameU8, this.#commandValueU8 ]
+        return [ TYPE_BYTE,this.commandNameU8, this.commandValueU8 ]
     }
 
     static fromU8(u8: Uint8Array): CommandLogEntry {

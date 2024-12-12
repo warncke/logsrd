@@ -21,4 +21,8 @@ export default class StringCommandType extends CommandLogEntry {
             throw new Error("StringCommandType requires commandNameU8 and either commandValueU8 or value")
         }
     }
+
+    value(): string {
+        return new TextDecoder().decode(this.commandValueU8)
+    }
 }

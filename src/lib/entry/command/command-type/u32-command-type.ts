@@ -21,4 +21,8 @@ export default class U32CommandType extends CommandLogEntry {
             throw new Error("U32CommandType requires commandNameU8 and either commandValueU8 or value")
         }
     }
+
+    value(): number {
+        return new Uint32Array(this.commandValueU8.buffer)[0]
+    }
 }

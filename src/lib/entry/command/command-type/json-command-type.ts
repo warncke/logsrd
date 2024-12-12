@@ -24,4 +24,9 @@ export default class JSONCommandType extends CommandLogEntry {
             throw new Error("JSONCommandType requires commandNameU8 and either commandValueU8 or value")
         }
     }
+
+    value(): any {
+        const text = new TextDecoder().decode(this.commandValueU8)
+        return JSON.parse(text)
+    }
 }
