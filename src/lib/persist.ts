@@ -1,4 +1,6 @@
+import fs from 'node:fs/promises'
 import path from 'path';
+
 import ColdLog from './cold-log';
 import HotLog from './hot-log';
 import LogConfig from './log-config';
@@ -116,7 +118,12 @@ export type PersistConfig = {
     pageSize: number,
     diskCompactThreshold: number,
     memCompactThreshold: number,
+    coldLogFileName?: string,
+    hotLogFileName?: string,
 }
+
+const DEFAULT_COLD_LOG_FILE_NAME = 'global-cold.log'
+const DEFAULT_HOT_LOG_FILE_NAME = 'global-hot.log'
 
 export default class Persist {
     config: PersistConfig
@@ -124,12 +131,14 @@ export default class Persist {
     hotLog: HotLog
 
     constructor(config: PersistConfig) {
+        config.coldLogFileName = config.coldLogFileName || DEFAULT_COLD_LOG_FILE_NAME
+        config.hotLogFileName = config.hotLogFileName || DEFAULT_HOT_LOG_FILE_NAME
         this.config = config
         this.coldLog = new ColdLog({
-            logFile: path.join(this.config.dataDir, 'global-cold.log'),
+            logFile: path.join(this.config.dataDir, config.coldLogFileName),
         })
         this.hotLog = new HotLog({
-            logFile: path.join(this.config.dataDir, 'global-hot.log'),
+            logFile: path.join(this.config.dataDir, config.hotLogFileName),
         })
     }
 
@@ -141,14 +150,15 @@ export default class Persist {
     }
 
     async createLog({ config }: { config: LogConfig }): Promise<PersistLog> {
-        const pLog = new PersistLog({ config, persist: this })
+        const pLog = new PersistLog({ config, logId: config.logId, persist: this })
         await pLog.create()
         return pLog
     }
 
-    async deleteLog({ logId }: { logId: LogId }): Promise<void> {}
-
-    async openLog({ logId }: { logId: LogId }): Promise<PersistLog> {
-
+    async openLog({ logId }: { logId: LogId }): Promise<PersistLog|null> {
+        const pLog = new PersistLog({ logId, persist: this })
+        await pLog.init()
+        return pLog
     }
+
 }

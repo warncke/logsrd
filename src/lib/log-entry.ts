@@ -1,6 +1,6 @@
-import Binary from './entry/binary'
-import Command from './entry/command';
-import JSON from './entry/json';
+import BinaryLogEntry from './entry/binary-log-entry'
+import CommandLogEntry from './entry/command-log-entry';
+import JSONLogEntry from './entry/json-log-entry';
 
 /**
  * Every LogEntry begins with a single byte interpreted as a little endian unsigned integer
@@ -11,34 +11,38 @@ import JSON from './entry/json';
  * 
  */
 
-enum EntryType {
+export enum EntryType {
     COMMAND,
     BINARY,
     JSON,
 }
 
 type ENTRY_TYPE_CLASSES =
-    typeof Command  |
-    typeof Binary   | 
-    typeof JSON
+    typeof CommandLogEntry  |
+    typeof BinaryLogEntry   | 
+    typeof JSONLogEntry
 
-const ENTRY_CLASS: { [K in EntryType]: ENTRY_TYPE_CLASSES} = {
-    [EntryType.COMMAND]: Command,
-    [EntryType.BINARY]: Binary,
-    [EntryType.JSON]: JSON,
+const ENTRY_CLASS: { [index: number]: ENTRY_TYPE_CLASSES} = {
+    [EntryType.COMMAND]: CommandLogEntry,
+    [EntryType.BINARY]: BinaryLogEntry,
+    [EntryType.JSON]: JSONLogEntry,
 }
 
 export default class LogEntry {
     constructor() {
     }
 
-    fromDataView(dataView: DataView) {
-        const entryType: EntryType = dataView.getUint8(0);
+    static fromU8(u8: Uint8Array): LogEntry {
+        const entryType: number|undefined = u8.at(0);
 
-        if (!ENTRY_CLASS[entryType]) {
+        if (entryType === undefined || !(entryType in ENTRY_CLASS)) {
             throw new Error(`Invalid entryType: ${entryType}`);
         }
-
-        return ENTRY_CLASS[entryType].fromDataView(dataView);
+        else {
+            return ENTRY_CLASS[entryType].fromU8(
+                // create new Entry of correct class from the buffer minus the first byte
+                new Uint8Array(u8.buffer, u8.byteOffset + 1, u8.byteLength - 1)
+            )
+        }
     }
 }

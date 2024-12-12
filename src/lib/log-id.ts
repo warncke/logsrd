@@ -4,7 +4,7 @@ class LogId {
     #base64: string | null = null;
     logId: any;
 
-    constructor(logId: any) {
+    constructor(logId: Uint8Array) {
         this.logId = logId;
     }
 

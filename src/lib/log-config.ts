@@ -20,8 +20,22 @@ export const SCHEMA = {
 }
 
 export default class LogConfig {
-    constructor() {
+    logId: LogId
+    master: string
+    replicas: string[]
 
+    constructor({
+        logId,
+        master,
+        replicas
+    }: {
+        logId: LogId,
+        master: string,
+        replicas?: string[]
+    }) {
+        this.logId = logId
+        this.master = master
+        this.replicas = replicas ? replicas : []
     }
 
     static fromJSON(configJSON: any) {

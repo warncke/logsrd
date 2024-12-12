@@ -18,13 +18,26 @@ export default class Server {
         this.persist = persist;
     }
 
-    async createLog({ config }: { config: LogConfig }): Promise<Log> {
+    async createLog({ config }: { config: LogConfig }): Promise<Log|null> {
         const pLog = await this.persist.createLog({ config });
+        if (pLog === null) {
+            return null
+        }
         return new Log({ persist: pLog });
     }
 
-    async deleteLog(logId: LogId): Promise<void> {
-        await this.closeLog(logId);
+    async deleteLog(logId: LogId): Promise<boolean> {
+        const log = await this.openLog(logId)
+        if (log === null) {
+            return false
+        }
+        if (await log.persist.delete()) {
+            this.closeLog(logId)
+            return true
+        }
+        else {
+            return false
+        }
     }
 
     async getLog(logId: LogId): Promise<Log | null> {
@@ -47,6 +60,5 @@ export default class Server {
 
     async closeLog(logId: LogId): Promise<void> {
         this.openLogs.delete(logId.base64());
-        await this.persist.deleteLog(logId);
     }
 }
