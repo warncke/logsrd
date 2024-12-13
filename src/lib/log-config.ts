@@ -1,5 +1,5 @@
 import LogId from './log-id';
-import { LOG_TYPE_MAP, LogType } from './types';
+import { ILogConfig, LOG_TYPE_MAP, LogType } from './types';
 
 export const SCHEMA = {
     type: 'object',
@@ -23,7 +23,7 @@ export const SCHEMA = {
     },
     requires: ['type'],
 }
-export default class LogConfig {
+export default class LogConfig implements ILogConfig {
     logId: LogId
     master: string
     replicas: string[]

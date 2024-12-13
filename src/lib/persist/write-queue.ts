@@ -1,17 +1,9 @@
-import { FileHandle } from "node:fs/promises";
-import LogEntry from "./log-entry";
-import LogId from "./log-id";
+import { WriteQueueItem } from "../types";
 
 export interface Writable {
     byteLength: () => number,
     u8s: () => Uint8Array[],
 }
-
-export type WriteQueueItem = {
-    logId: LogId,
-    entry: Writable,
-}
-
 export default class WriteQueue {
     promise: Promise<void>
     resolve: Function|null = null

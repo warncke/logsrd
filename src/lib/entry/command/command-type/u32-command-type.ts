@@ -23,10 +23,18 @@ export default class U32CommandType extends CommandLogEntry {
     }
 
     value(): number {
-        return new Uint32Array(this.commandValueU8.buffer)[0]
+        return new Uint32Array(
+            // if we are reading from a shared buffer then need to slice (copy) it in order
+            // to get the correct alignment because 32 must be aligned to 4 byte intervals
+            this.commandValueU8.buffer.byteLength > 4
+                ? this.commandValueU8.slice(0, 4).buffer
+                : this.commandValueU8.buffer
+        )[0]
     }
 
     setValue(value: number): void {
         this.commandValueU8 = new Uint8Array(new Uint32Array([value]).buffer)
     }
+
+    static expectedByteLength: number = 6
 }

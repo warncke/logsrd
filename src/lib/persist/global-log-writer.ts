@@ -1,13 +1,14 @@
 import fs from 'node:fs/promises'
 
-import HotLog from "./hot-log";
-import ColdLog from "./cold-log";
 import WriteQueue from "./write-queue";
-import BeginWriteCommand from './entry/command/begin-write-command';
-import EndWriteCommand from './entry/command/end-write-command';
+import BeginWriteCommand from '../entry/command/begin-write-command';
+import EndWriteCommand from '../entry/command/end-write-command';
+import AbortWriteCommand from '../entry/command/abort-write-command';
+import { AbortWriteError } from '../types';
+import GlobalLog from './global-log';
 
 export default class GlobalLogWriter {
-    static async write(log: HotLog | ColdLog) {
+    static async write(log: GlobalLog): Promise<void> {
         if (log.writeInProgress) {    
             return
         }
@@ -29,15 +30,10 @@ export default class GlobalLogWriter {
             // create index of offset and length of every write which will
             // be added to the hot/cold log index if all writes are successful
             const logs: Map<string, Array<number>> = new Map()
-            // create begin write command that will be written first
-            // correct size value will be set after calculating from write queue
-            const beginWrite = new BeginWriteCommand({value: 0})
             // build list of all buffers to write
-            const u8s: Uint8Array[] = [
-                ...beginWrite.u8s()
-            ]
+            const u8s: Uint8Array[] = []
             // get total length of this write
-            let totalBytes = beginWrite.byteLength()
+            let totalBytes = 0
             // add all items from queue to list of u8s to write
             for (const item of writeQueue.queue) {
                 // add logId buffer first
@@ -66,36 +62,46 @@ export default class GlobalLogWriter {
                 totalBytes += lengthBytes.byteLength
                 u8s.push(lengthBytes)
             }
-            // get bytes for entries not including begin/end write commands
-            const entryBytes = totalBytes - beginWrite.byteLength()
-            // set total entry bytes written
-            beginWrite.setValue(entryBytes)
-            // add end write command with entry bytes written
-            u8s.push(
-                ...new EndWriteCommand({value: entryBytes}).u8s()
+            // add begin write command that will be written first
+            const beginWrite = new BeginWriteCommand({value: totalBytes})
+            u8s.unshift(
+                ...beginWrite.u8s()
             )
+            // add end write command
+            const endWrite = new EndWriteCommand({value: totalBytes})
+            u8s.push(
+                ...endWrite.u8s()
+            )
+            totalBytes += endWrite.byteLength()
             // write buffers
-            await log.fh.writev(u8s)
+            const ret = await log.fh.writev(u8s)
             // sync data only as we do not care about metadata
             await log.fh.datasync()
-            // update hot/cold log index with added offsets
+
             for (const [logId, offsets] of logs) {
-                if (log.logs.has(logId)) {
-                    log.logs.get(logId)!.push(...offsets)
+                if (log.index.has(logId)) {
+                    log.index.get(logId)!.push(...offsets)
                 }
                 else {
-                    log.logs.set(logId, offsets)
+                    log.index.set(logId, offsets)
                 }
             }
+
             if (writeQueue.resolve !== null) {
                 writeQueue.resolve()
             }
         } catch (err) {
-            console.error(err)
-            // TODO: handle error appropriately
+            // submitters waiting on write queue must be notified of error
+            // this will cause their requests to error out. we do not
+            // reattempt the same queue and truncate any partial write
             if (writeQueue.reject !== null) writeQueue.reject(err)
+            // rethrow error to notify caller
+            throw err
         }
-        // set this queue to null because it has been written now
+        // set this queue to null because it has been written now. if an
+        // error occurred this queue will stay in progress until it is
+        // cleaned up preventing any further writes until the log is
+        // trucated if a partial write occurred.
         log.writeInProgress = null
         // if new write queue has any items then process it on next tick
         if (log.writeQueue !== null && log.writeQueue.queue.length > 0) {

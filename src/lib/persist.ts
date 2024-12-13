@@ -1,11 +1,14 @@
 import fs from 'node:fs/promises'
 import path from 'path';
 
-import ColdLog from './cold-log';
-import HotLog from './hot-log';
+import ColdLog from './persist/cold-log';
+import HotLog from './persist/hot-log';
 import LogConfig from './log-config';
 import LogId from './log-id';
-import PersistLog from './persist-log';
+import PersistLog from './persist/persist-log';
+import LogEntry from './log-entry';
+import CreateLogCommand from "./entry/command/create-log-command";
+import LogLog from './persist/log-log';
 
 /**
  * Persistence
@@ -124,16 +127,29 @@ export default class Persist {
     config: PersistConfig
     coldLog: ColdLog
     hotLog: HotLog
-    openLogs: Map<string, PersistLog>
+    openLogs: Map<string, LogLog>
 
     constructor(config: PersistConfig) {
         config.coldLogFileName = config.coldLogFileName || DEFAULT_COLD_LOG_FILE_NAME
         config.hotLogFileName = config.hotLogFileName || DEFAULT_HOT_LOG_FILE_NAME
         this.config = config
         this.coldLog = new ColdLog({
+            // TODO: this is hacky but i want to be able to control log reading based on log
+            // config and i dont want to make these params optional and then have to add checks
+            // everywhere to statisfy tsc so i am doing it like this for now
+            config: new LogConfig({
+                logId: new LogId(new Uint8Array(16)),
+                master: '',
+                type: 'global'
+            }),
             logFile: path.join(this.config.dataDir, config.coldLogFileName),
         })
         this.hotLog = new HotLog({
+            config: new LogConfig({
+                logId: new LogId(new Uint8Array(16)),
+                master: '',
+                type: 'global'
+            }),
             logFile: path.join(this.config.dataDir, config.hotLogFileName),
         })
         this.openLogs = new Map();
@@ -146,21 +162,20 @@ export default class Persist {
         ])
     }
 
-    async createLog({ config }: { config: LogConfig }): Promise<PersistLog> {
-        return PersistLog.create({ config, logId: config.logId, persist: this })
+    async appendLog(logId: LogId, entry: LogEntry): Promise<void> {
+        
     }
 
-    async openLog({ logId }: { logId: LogId }): Promise<PersistLog|null> {
-        if (this.openLogs.has(logId.base64())) {
-            return this.openLogs.get(logId.base64()) || null;
-        }
-        const pLog = await PersistLog.init({ logId, persist: this })
-        // init will return false if the log does not exist
-        if (pLog === null) {
-            return null
-        }
-        this.openLogs.set(logId.base64(), pLog);
-        return pLog
+    async createLog(logId: LogId, entry: CreateLogCommand): Promise<boolean> {
+        await this.hotLog.append(logId, entry)
+        return true
     }
 
+    async deleteLog(logId: LogId): Promise<boolean> {
+        return false
+    }
+
+    // async openLog({ logId }: { logId: LogId }): Promise<PersistLog|null> {
+
+    // }
 }

@@ -9,4 +9,8 @@ export default class LogEntry {
     byteLength(): number {
         return 0
     }
+
+    // entry types with fixed length should override this
+    // 0 means variable length entry
+    static expectedByteLength: number = 0
 }

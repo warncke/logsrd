@@ -19,33 +19,12 @@ export default class Server {
     }
 
     async createLog({ config }: { config: any }): Promise<LogConfig|null> {
-        const log = await Log.create({ config, server: this })
-        if (log === null) {
-            return null
-        }
-        else {
-            return log.persist.config
-        }
+        config = await Log.create({ config, server: this })
+        return config === null ? null : config
     }
 
     async deleteLog(logId: LogId): Promise<boolean> {
-        const log = await this.getLog(logId)
-        if (log === null) {
-            return false
-        }
-        if (await log.delete()) {
-            return true
-        }
-        else {
-            return false
-        }
-    }
-
-    async getLog(logId: LogId): Promise<Log | null> {
-        const pLog = await this.persist.openLog({ logId });
-        if (pLog === null) {
-            return null;
-        }
-        return new Log({ persist: pLog });
+        const log = new Log({ logId, persist: this.persist })
+        return await log.delete()
     }
 }
