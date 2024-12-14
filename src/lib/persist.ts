@@ -130,10 +130,8 @@ export default class Persist {
     openLogs: Map<string, LogLog>
 
     constructor(config: PersistConfig) {
-        config.coldLogFileName =
-            config.coldLogFileName || DEFAULT_COLD_LOG_FILE_NAME
-        config.hotLogFileName =
-            config.hotLogFileName || DEFAULT_HOT_LOG_FILE_NAME
+        config.coldLogFileName = config.coldLogFileName || DEFAULT_COLD_LOG_FILE_NAME
+        config.hotLogFileName = config.hotLogFileName || DEFAULT_HOT_LOG_FILE_NAME
         this.config = config
         this.coldLog = new ColdLog({
             // TODO: this is hacky but i want to be able to control log reading based on log

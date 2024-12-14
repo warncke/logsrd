@@ -24,13 +24,7 @@ export default class Log {
 
     async head() {}
 
-    static async create({
-        config,
-        server,
-    }: {
-        config: any
-        server: Server
-    }): Promise<LogConfig | null> {
+    static async create({ config, server }: { config: any; server: Server }): Promise<LogConfig | null> {
         const logId = await LogId.newRandom()
         config.logId = logId.base64()
         config.master = server.config.host

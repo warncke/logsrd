@@ -1,7 +1,5 @@
 import { CommandName } from "../../globals"
-import JSONCommandType, {
-    JSONCommandTypeArgs,
-} from "./command-type/json-command-type"
+import JSONCommandType, { JSONCommandTypeArgs } from "./command-type/json-command-type"
 
 const COMMAND_NAME_BYTE = new Uint8Array([CommandName.CREATE_LOG])
 

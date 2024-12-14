@@ -47,9 +47,7 @@ export default class GlobalLogWriter {
             await log.fh.datasync()
 
             if (ret.bytesWritten !== totalBytes) {
-                throw new Error(
-                    `Failed to write all bytes. Expected: ${totalBytes} Actual: ${ret.bytesWritten}`,
-                )
+                throw new Error(`Failed to write all bytes. Expected: ${totalBytes} Actual: ${ret.bytesWritten}`)
             }
 
             for (const [logId, offsets] of logs) {

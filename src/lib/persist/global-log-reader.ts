@@ -8,11 +8,7 @@ import GlobalLog from "./global-log"
 export default class GlobalLogReader {
     static async initGlobal(log: GlobalLog): Promise<void> {
         // this should only be run at startup so these should always be null
-        if (
-            log.fh !== null ||
-            log.readBlocked !== null ||
-            log.writeBlocked !== null
-        ) {
+        if (log.fh !== null || log.readBlocked !== null || log.writeBlocked !== null) {
             throw new Error("Error starting initGlobal")
         }
         // create promise to block reads/writes on log while this runs
@@ -70,11 +66,7 @@ export default class GlobalLogReader {
 
             while (u8Offset < ret.bytesRead) {
                 const res = GlobalLogEntry.fromPartialU8(
-                    new Uint8Array(
-                        currU8.buffer,
-                        currU8.byteOffset + u8Offset,
-                        currU8.byteLength - u8Offset,
-                    ),
+                    new Uint8Array(currU8.buffer, currU8.byteOffset + u8Offset, currU8.byteLength - u8Offset),
                 )
                 if (res.err) {
                     throw res.err

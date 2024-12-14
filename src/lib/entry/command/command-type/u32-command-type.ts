@@ -16,14 +16,10 @@ export default class U32CommandType extends CommandLogEntry {
         } else if (args.commandNameU8 && args.value !== undefined) {
             super({
                 commandNameU8: args.commandNameU8,
-                commandValueU8: new Uint8Array(
-                    new Uint32Array([args.value]).buffer,
-                ),
+                commandValueU8: new Uint8Array(new Uint32Array([args.value]).buffer),
             })
         } else {
-            throw new Error(
-                "U32CommandType requires commandNameU8 and either commandValueU8 or value",
-            )
+            throw new Error("U32CommandType requires commandNameU8 and either commandValueU8 or value")
         }
     }
 

@@ -22,9 +22,7 @@ export default class JSONCommandType extends CommandLogEntry {
                 commandValueU8: new TextEncoder().encode(args.value),
             })
         } else {
-            throw new Error(
-                "JSONCommandType requires commandNameU8 and either commandValueU8 or value",
-            )
+            throw new Error("JSONCommandType requires commandNameU8 and either commandValueU8 or value")
         }
     }
 
@@ -34,8 +32,7 @@ export default class JSONCommandType extends CommandLogEntry {
     }
 
     setValue(value: any): void {
-        const jsonString =
-            typeof value === "string" ? value : JSON.stringify(value)
+        const jsonString = typeof value === "string" ? value : JSON.stringify(value)
         this.commandValueU8 = new TextEncoder().encode(jsonString)
     }
 }

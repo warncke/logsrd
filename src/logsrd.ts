@@ -49,13 +49,7 @@ async function run(): Promise<void> {
                     if (config === null) {
                         res.cork(() => {
                             res.writeStatus("400")
-                            res.end(
-                                JSON.stringify(
-                                    { error: "failed to create log" },
-                                    null,
-                                    2,
-                                ),
-                            )
+                            res.end(JSON.stringify({ error: "failed to create log" }, null, 2))
                         })
                     } else {
                         res.cork(() => {
@@ -65,26 +59,14 @@ async function run(): Promise<void> {
                 } catch (err: any) {
                     res.cork(() => {
                         res.writeStatus("400")
-                        res.end(
-                            JSON.stringify(
-                                { error: err.message, stack: err.stack },
-                                null,
-                                2,
-                            ),
-                        )
+                        res.end(JSON.stringify({ error: err.message, stack: err.stack }, null, 2))
                     })
                 }
             },
             () => {
                 res.cork(() => {
                     res.writeStatus("400")
-                    res.end(
-                        JSON.stringify(
-                            { error: "aborted: invalid JSON or no data" },
-                            null,
-                            2,
-                        ),
-                    )
+                    res.end(JSON.stringify({ error: "aborted: invalid JSON or no data" }, null, 2))
                 })
             },
         )
@@ -125,11 +107,7 @@ function readJson(res: HttpResponse, cb: (data: any) => void, err: () => any) {
             let json
             if (buffer) {
                 try {
-                    json = JSON.parse(
-                        new TextDecoder().decode(
-                            Buffer.concat([buffer, chunk]),
-                        ),
-                    )
+                    json = JSON.parse(new TextDecoder().decode(Buffer.concat([buffer, chunk])))
                 } catch (e) {
                     /* res.close calls onAborted */
                     res.close()

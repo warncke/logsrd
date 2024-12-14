@@ -11,13 +11,7 @@ export default class Server {
     config: ServerConfig
     persist: Persist
 
-    constructor({
-        config,
-        persist,
-    }: {
-        config: ServerConfig
-        persist: Persist
-    }) {
+    constructor({ config, persist }: { config: ServerConfig; persist: Persist }) {
         this.config = config
         this.persist = persist
     }

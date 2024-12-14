@@ -9,13 +9,7 @@ export default class JSONLogEntry extends LogEntry {
     #jsonStr: string | null = null
     #jsonU8: Uint8Array | null = null
 
-    constructor({
-        jsonStr,
-        jsonU8,
-    }: {
-        jsonStr?: string | null
-        jsonU8?: Uint8Array | null
-    }) {
+    constructor({ jsonStr, jsonU8 }: { jsonStr?: string | null; jsonU8?: Uint8Array | null }) {
         super()
         if (jsonStr) {
             this.#jsonStr = jsonStr
@@ -32,9 +26,7 @@ export default class JSONLogEntry extends LogEntry {
     }
 
     cksum(): Uint8Array {
-        return new Uint8Array(
-            new Uint32Array([crc32(this.jsonU8(), crc32(TYPE_BYTE))]).buffer,
-        )
+        return new Uint8Array(new Uint32Array([crc32(this.jsonU8(), crc32(TYPE_BYTE))]).buffer)
     }
 
     jsonU8(): Uint8Array {

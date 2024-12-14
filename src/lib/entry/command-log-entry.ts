@@ -8,13 +8,7 @@ export default class CommandLogEntry extends LogEntry {
     commandNameU8: Uint8Array
     commandValueU8: Uint8Array
 
-    constructor({
-        commandNameU8,
-        commandValueU8,
-    }: {
-        commandNameU8: Uint8Array
-        commandValueU8: Uint8Array
-    }) {
+    constructor({ commandNameU8, commandValueU8 }: { commandNameU8: Uint8Array; commandValueU8: Uint8Array }) {
         super()
         this.commandNameU8 = commandNameU8
         this.commandValueU8 = commandValueU8
@@ -27,12 +21,7 @@ export default class CommandLogEntry extends LogEntry {
 
     cksum(): Uint8Array {
         return new Uint8Array(
-            new Uint32Array([
-                crc32(
-                    this.commandValueU8,
-                    crc32(this.commandNameU8, crc32(TYPE_BYTE)),
-                ),
-            ]).buffer,
+            new Uint32Array([crc32(this.commandValueU8, crc32(this.commandNameU8, crc32(TYPE_BYTE)))]).buffer,
         )
     }
 

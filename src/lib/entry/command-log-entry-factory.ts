@@ -10,11 +10,7 @@ export default class CommandLogEntryFactory {
         } else {
             return new COMMAND_CLASS[commandName]({
                 commandNameU8: new Uint8Array(u8.buffer, 0, 1),
-                commandValueU8: new Uint8Array(
-                    u8.buffer,
-                    u8.byteOffset + 1,
-                    u8.byteLength - 1,
-                ),
+                commandValueU8: new Uint8Array(u8.buffer, u8.byteOffset + 1, u8.byteLength - 1),
             })
         }
     }

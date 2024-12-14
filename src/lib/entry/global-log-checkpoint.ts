@@ -29,10 +29,7 @@ export default class GlobalLogCheckpoint extends LogEntry {
                 ? new Uint8Array(new Uint32Array([lastEntryLength]).buffer)
                 : lastEntryLength
         if (crc32 !== undefined) {
-            this.crc32 =
-                typeof crc32 === "number"
-                    ? new Uint8Array(new Uint32Array([crc32]).buffer)
-                    : crc32
+            this.crc32 = typeof crc32 === "number" ? new Uint8Array(new Uint32Array([crc32]).buffer) : crc32
         } else {
             this.crc32 = null
         }
@@ -48,42 +45,23 @@ export default class GlobalLogCheckpoint extends LogEntry {
 
     cksum(): Uint8Array {
         return new Uint8Array(
-            new Uint32Array([
-                crc32(
-                    this.lastEntryOffset,
-                    crc32(this.lastEntryLength, crc32(TYPE_BYTE)),
-                ),
-            ]).buffer,
+            new Uint32Array([crc32(this.lastEntryOffset, crc32(this.lastEntryLength, crc32(TYPE_BYTE)))]).buffer,
         )
     }
 
     verify(): boolean {
-        return this.crc32 === null
-            ? false
-            : new Uint32Array(this.crc32)[0] ===
-                  new Uint32Array(this.cksum())[0]
+        return this.crc32 === null ? false : new Uint32Array(this.crc32)[0] === new Uint32Array(this.cksum())[0]
     }
 
     u8s(): Uint8Array[] {
-        return [
-            TYPE_BYTE,
-            this.lastEntryOffset,
-            this.lastEntryLength,
-            this.cksum(),
-        ]
+        return [TYPE_BYTE, this.lastEntryOffset, this.lastEntryLength, this.cksum()]
     }
 
     fromU8(u8: Uint8Array): GlobalLogCheckpoint {
         return new GlobalLogCheckpoint({
-            lastEntryOffset: new Uint8Array(
-                u8.buffer.slice(u8.byteOffset, u8.byteOffset + 4),
-            ),
-            lastEntryLength: new Uint8Array(
-                u8.buffer.slice(u8.byteOffset + 4, u8.byteOffset + 8),
-            ),
-            crc32: new Uint8Array(
-                u8.buffer.slice(u8.byteOffset + 8, u8.byteOffset + 12),
-            ),
+            lastEntryOffset: new Uint8Array(u8.buffer.slice(u8.byteOffset, u8.byteOffset + 4)),
+            lastEntryLength: new Uint8Array(u8.buffer.slice(u8.byteOffset + 4, u8.byteOffset + 8)),
+            crc32: new Uint8Array(u8.buffer.slice(u8.byteOffset + 8, u8.byteOffset + 12)),
         })
     }
 }
