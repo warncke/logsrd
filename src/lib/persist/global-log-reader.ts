@@ -1,9 +1,9 @@
-import fs, { FileHandle } from 'node:fs/promises'
+import fs, { FileHandle } from "node:fs/promises"
 
-import GlobalLog from './global-log'
-import BeginWriteCommand from '../entry/command/begin-write-command'
-import LogId from '../log-id'
-import EndWriteCommand from '../entry/command/end-write-command'
+import BeginWriteCommand from "../entry/command/begin-write-command"
+import EndWriteCommand from "../entry/command/end-write-command"
+import LogId from "../log-id"
+import GlobalLog from "./global-log"
 
 // this runs at startup so no real concern about memory usage
 // set this as high as needed to maximize throughput
@@ -12,38 +12,42 @@ const GLOBAL_READ_BUFFER_SIZE = 32
 export default class GlobalLogReader {
     static async initGlobal(log: GlobalLog): Promise<void> {
         // this should only be run at startup so these should always be null
-        if (log.fh !== null || log.readBlocked !== null || log.writeBlocked !== null) {
-            throw new Error('Error starting initGlobal')
+        if (
+            log.fh !== null ||
+            log.readBlocked !== null ||
+            log.writeBlocked !== null
+        ) {
+            throw new Error("Error starting initGlobal")
         }
         // create promise to block reads/writes on log while this runs
         // this should not really be necessary
         const promise = new Promise<void>((resolve, reject) => {
-            GlobalLogReader._initGlobal(log).then(() => {
-                // clear blockers when done
-                log.unblockRead()
-                log.unblockWrite()
-                resolve()
-            }).catch(reject)
+            GlobalLogReader._initGlobal(log)
+                .then(() => {
+                    // clear blockers when done
+                    log.unblockRead()
+                    log.unblockWrite()
+                    resolve()
+                })
+                .catch(reject)
         })
         log.readBlocked = promise
         log.writeBlocked = promise
-        
+
         return promise
     }
 
     static async _initGlobal(log: GlobalLog): Promise<void> {
-        let fh: FileHandle|null = null
+        let fh: FileHandle | null = null
         try {
-            fh = await fs.open(log.logFile, 'r')
+            fh = await fs.open(log.logFile, "r")
             await GlobalLogReader.__initGlobal(log, fh)
-        }
-        catch (err: any) {
+        } catch (err: any) {
             // ignore if file does not exist - it will be created on open for write
-            if (err.code !== 'ENOENT') {
+            if (err.code !== "ENOENT") {
                 throw err
             }
-        }
-        finally {
+        } finally {
             if (fh !== null) {
                 await fh.close()
             }
@@ -62,7 +66,7 @@ export default class GlobalLogReader {
         // when set to true next entry should be begin write
         let expectBeginWrite = true
         // array of pending entries that will be confirmed when end write is verified
-        let pendingEntries: Array<LogId|number> = []
+        let pendingEntries: Array<LogId | number> = []
         // this is shit but i wrote the parsing in a stpuid way that makes it hard to
         // join across buffer segments and i am going to refactor the whole thing to
         // use log entries instead so doing it like this for now
@@ -72,10 +76,19 @@ export default class GlobalLogReader {
         while (u8Offset < currU8.byteLength) {
             // log should always start with BeginWriteCommand
             if (expectBeginWrite) {
-                const beginWrite = BeginWriteCommand.fromU8(new Uint8Array(currU8.buffer, u8Offset, BeginWriteCommand.expectedByteLength))
+                const beginWrite = BeginWriteCommand.fromU8(
+                    new Uint8Array(
+                        currU8.buffer,
+                        u8Offset,
+                        BeginWriteCommand.expectedByteLength,
+                    ),
+                )
                 lastBeginWriteOffset = fileOffset + u8Offset
                 lastBeginWriteLength = beginWrite.value()
-                nextExpectedEndWrite = lastBeginWriteOffset + lastBeginWriteLength + BeginWriteCommand.expectedByteLength
+                nextExpectedEndWrite =
+                    lastBeginWriteOffset +
+                    lastBeginWriteLength +
+                    BeginWriteCommand.expectedByteLength
                 u8Offset += BeginWriteCommand.expectedByteLength
                 expectBeginWrite = false
             }
@@ -84,7 +97,9 @@ export default class GlobalLogReader {
             u8Offset += 16
             // next 2 bytes are the length of the log entry. use slice because
             // offset needs to be aligned to multiple of 2
-            const entryLength = new Uint16Array(currU8.buffer.slice(u8Offset, u8Offset + 2))[0]
+            const entryLength = new Uint16Array(
+                currU8.buffer.slice(u8Offset, u8Offset + 2),
+            )[0]
             u8Offset += 2
             // add logId, entry offset from start of file, and entry length to pending
             pendingEntries.push(logId, fileOffset + u8Offset, entryLength)
@@ -92,19 +107,31 @@ export default class GlobalLogReader {
             // skip over entry data
             u8Offset += entryLength
             // length bytes are also written after entry
-            const endEntryLength = new Uint16Array(currU8.buffer.slice(u8Offset, u8Offset + 2))[0]
+            const endEntryLength = new Uint16Array(
+                currU8.buffer.slice(u8Offset, u8Offset + 2),
+            )[0]
             if (endEntryLength !== entryLength) {
-                throw new Error(`Entry length mismatch at ${fileOffset + u8Offset}`)
+                throw new Error(
+                    `Entry length mismatch at ${fileOffset + u8Offset}`,
+                )
             }
             u8Offset += 2
             // we have reached location where end write should be
             if (fileOffset + u8Offset === nextExpectedEndWrite) {
                 // get end write command
-                const endWrite = EndWriteCommand.fromU8(new Uint8Array(currU8.buffer, u8Offset, BeginWriteCommand.expectedByteLength))
+                const endWrite = EndWriteCommand.fromU8(
+                    new Uint8Array(
+                        currU8.buffer,
+                        u8Offset,
+                        BeginWriteCommand.expectedByteLength,
+                    ),
+                )
                 const endWriteLength = endWrite.value()
                 // check that end write matches begin write
                 if (endWriteLength !== lastBeginWriteLength) {
-                    throw new Error(`End write length mismatch at ${fileOffset + u8Offset} expected: ${lastBeginWriteLength} actual: ${endWriteLength}`)
+                    throw new Error(
+                        `End write length mismatch at ${fileOffset + u8Offset} expected: ${lastBeginWriteLength} actual: ${endWriteLength}`,
+                    )
                 }
                 u8Offset += EndWriteCommand.expectedByteLength
                 // add entry locations to index by logId
@@ -133,12 +160,14 @@ export default class GlobalLogReader {
                 // if there are other writes after that you dont know where they start. need
                 // to make sure nothing written after aborted write. but if bug exists then still
                 // need to try to recover as much data as possible, so read from end maybe?
-                throw new Error(`End write not found at ${fileOffset + u8Offset} expected ${nextExpectedEndWrite}`)
+                throw new Error(
+                    `End write not found at ${fileOffset + u8Offset} expected ${nextExpectedEndWrite}`,
+                )
             }
         }
 
         if (pendingEntries.length > 0) {
-            throw new Error('End write not found at end of file')
+            throw new Error("End write not found at end of file")
         }
 
         log.byteLength = currU8.byteLength

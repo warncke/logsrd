@@ -1,15 +1,14 @@
-import { ReadQueueItem } from "../types";
+import { ReadQueueItem } from "../types"
 
 export default class ReadQueue {
-    queue: ReadQueueItem[] = [];
+    queue: ReadQueueItem[] = []
 
-    constructor() {
-    }
+    constructor() {}
 
     push(item: ReadQueueItem): void {
         item.promise = new Promise((resolve, reject) => {
-            item.resolve = resolve;
-            item.reject = reject;
+            item.resolve = resolve
+            item.reject = reject
         })
         this.queue.push(item)
     }

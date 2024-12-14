@@ -1,10 +1,10 @@
-import { WriteQueueItem, Writable } from "../types";
+import { Writable, WriteQueueItem } from "../types"
 
 export default class WriteQueue {
     promise: Promise<void>
-    resolve: Function|null = null
-    reject: Function|null = null
-    queue: WriteQueueItem[] = [];
+    resolve: Function | null = null
+    reject: Function | null = null
+    queue: WriteQueueItem[] = []
 
     constructor() {
         // create a single promise to track the write of the entire queue
@@ -13,8 +13,8 @@ export default class WriteQueue {
         // and so all writers who are pending on the queue need to wait until all
         // writes are complete
         this.promise = new Promise((resolve, reject) => {
-            this.resolve = resolve;
-            this.reject = reject;
+            this.resolve = resolve
+            this.reject = reject
         })
     }
 

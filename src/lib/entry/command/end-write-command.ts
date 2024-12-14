@@ -1,5 +1,7 @@
-import { CommandName, EntryType } from "../../types";
-import U32CommandType, { U32CommandTypeArgs } from "./command-type/u32-command-type";
+import { CommandName, EntryType } from "../../types"
+import U32CommandType, {
+    U32CommandTypeArgs,
+} from "./command-type/u32-command-type"
 
 const COMMAND_NAME_BYTE = new Uint8Array([CommandName.END_WRITE])
 
@@ -22,7 +24,7 @@ export default class EndWriteCommand extends U32CommandType {
         }
         return new EndWriteCommand({
             commandNameU8: new Uint8Array(u8.buffer, 1, 1),
-            commandValueU8: new Uint8Array(u8.buffer, 2, 4)
+            commandValueU8: new Uint8Array(u8.buffer, 2, 4),
         })
     }
 }

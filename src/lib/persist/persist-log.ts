@@ -1,14 +1,14 @@
-import { FileHandle } from 'node:fs/promises'
+import { FileHandle } from "node:fs/promises"
 
-import WriteQueue from './write-queue'
-import { PersistLogArgs } from '../types'
-import LogConfig from "../log-config";
-import ReadQueue from './read-queue'
+import LogConfig from "../log-config"
+import { PersistLogArgs } from "../types"
+import ReadQueue from "./read-queue"
+import WriteQueue from "./write-queue"
 
 export default class PersistLog {
     config: LogConfig
     // write file handle
-    fh: FileHandle|null = null
+    fh: FileHandle | null = null
     // read file handles
     readFhs: Array<FileHandle> = []
     // file name of log
@@ -22,24 +22,21 @@ export default class PersistLog {
     byteLength: number = 0
     // all writes are submitted to writeQueue. when writeQueueInProgress is null
     // writeQueue is moved to writeQueueInProgress and a new writeQueue is created.
-    writeInProgress: WriteQueue|null = null
+    writeInProgress: WriteQueue | null = null
     writeQueue: WriteQueue
     // when writes need to be blocked by an operation, like finalizing compaction
     // of global logs, the operation sets the writeBocked promise here. if
     // writeInProgress is not null the blocking operation must wait for it to
     // complete before starting. after the blocking operation completes it must
     // move the writeQueue to in progress if it has any pending writes.
-    writeBlocked: Promise<void>|null = null
+    writeBlocked: Promise<void> | null = null
     // read queues and blocking work the same way as for writing but they differ
     // in how they are handled (see implementation for details)
-    readInProgress: ReadQueue|null = null
+    readInProgress: ReadQueue | null = null
     readQueue: ReadQueue
-    readBlocked: Promise<void>|null = null
+    readBlocked: Promise<void> | null = null
 
-    constructor({
-        config,
-        logFile,
-    } : PersistLogArgs) {
+    constructor({ config, logFile }: PersistLogArgs) {
         this.config = config
         this.logFile = logFile
         this.readQueue = new ReadQueue()
@@ -55,5 +52,4 @@ export default class PersistLog {
         this.writeBlocked = null
         // TODO: add method to process write queue
     }
-
 }

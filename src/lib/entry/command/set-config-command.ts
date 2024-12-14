@@ -1,5 +1,7 @@
-import { CommandName } from "../../types";
-import JSONCommandType, { JSONCommandTypeArgs } from "./command-type/json-command-type";
+import { CommandName } from "../../types"
+import JSONCommandType, {
+    JSONCommandTypeArgs,
+} from "./command-type/json-command-type"
 
 const COMMAND_NAME_BYTE = new Uint8Array([CommandName.SET_CONFIG])
 

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises"
 
-import LogId from "../log-id";
-import { PersistLogArgs } from "../types";
-import PersistLog from "./persist-log";
+import LogId from "../log-id"
+import { PersistLogArgs } from "../types"
+import PersistLog from "./persist-log"
 
 export default class LogLog extends PersistLog {
     // index of offset, length of log entries. does not necessarily start with
@@ -10,7 +10,7 @@ export default class LogLog extends PersistLog {
     index: Array<number> = []
     logId: LogId
 
-    constructor({ logId, ...args}: PersistLogArgs & { logId: LogId }) {
+    constructor({ logId, ...args }: PersistLogArgs & { logId: LogId }) {
         super(args)
         this.logId = logId
     }
@@ -19,9 +19,8 @@ export default class LogLog extends PersistLog {
         try {
             const stat = await fs.stat(this.logFile)
             this.byteLength = stat.size
-        }
-        catch (err: any) {
-            if (err.code !== 'ENOENT') {
+        } catch (err: any) {
+            if (err.code !== "ENOENT") {
                 throw err
             }
             return false

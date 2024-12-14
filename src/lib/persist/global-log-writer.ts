@@ -1,12 +1,12 @@
-import fs from 'node:fs/promises'
+import fs from "node:fs/promises"
 
-import WriteQueue from "./write-queue";
-import GlobalLog from './global-log';
-import GlobalLogEntry from '../entry/global-log-entry';
+import GlobalLogEntry from "../entry/global-log-entry"
+import GlobalLog from "./global-log"
+import WriteQueue from "./write-queue"
 
 export default class GlobalLogWriter {
     static async write(log: GlobalLog): Promise<void> {
-        if (log.writeInProgress) {    
+        if (log.writeInProgress) {
             return
         }
         if (log.writeQueue === null) {
@@ -17,12 +17,12 @@ export default class GlobalLogWriter {
             return
         }
 
-        const writeQueue = log.writeInProgress = log.writeQueue!
+        const writeQueue = (log.writeInProgress = log.writeQueue!)
         log.writeQueue = new WriteQueue()
 
         try {
             if (log.fh === null) {
-                log.fh = await fs.open(log.logFile, 'a')
+                log.fh = await fs.open(log.logFile, "a")
             }
             // create index of offset and length of every write which will
             // be added to the hot/cold log index if all writes are successful
@@ -36,7 +36,7 @@ export default class GlobalLogWriter {
                 // create global log entry
                 const globalLogEntry = new GlobalLogEntry({
                     logId: item.logId,
-                    entry: item.entry
+                    entry: item.entry,
                 })
                 totalBytes += globalLogEntry.byteLength()
                 u8s.push(...globalLogEntry.u8s())
@@ -47,14 +47,15 @@ export default class GlobalLogWriter {
             await log.fh.datasync()
 
             if (ret.bytesWritten !== totalBytes) {
-                throw new Error(`Failed to write all bytes. Expected: ${totalBytes} Actual: ${ret.bytesWritten}`)
+                throw new Error(
+                    `Failed to write all bytes. Expected: ${totalBytes} Actual: ${ret.bytesWritten}`,
+                )
             }
 
             for (const [logId, offsets] of logs) {
                 if (log.index.has(logId)) {
                     log.index.get(logId)!.push(...offsets)
-                }
-                else {
+                } else {
                     log.index.set(logId, offsets)
                 }
             }

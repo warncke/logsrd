@@ -1,27 +1,27 @@
-import LogId from './log-id';
-import { ILogConfig, LOG_TYPE_MAP, LogType } from './types';
+import LogId from "./log-id"
+import { ILogConfig, LOG_TYPE_MAP, LogType } from "./types"
 
 export const SCHEMA = {
-    type: 'object',
+    type: "object",
     properties: {
         logId: {
-            type: 'string',
+            type: "string",
         },
         master: {
-            type: 'string',
+            type: "string",
         },
         replicas: {
-            type: 'array',
+            type: "array",
             items: {
-                type: 'string',
+                type: "string",
             },
         },
         type: {
-            type: 'string',
-            enum: ['binary', 'json'],
-        }
+            type: "string",
+            enum: ["binary", "json"],
+        },
     },
-    requires: ['type'],
+    requires: ["type"],
 }
 export default class LogConfig implements ILogConfig {
     logId: LogId
@@ -35,15 +35,14 @@ export default class LogConfig implements ILogConfig {
         replicas,
         type,
     }: {
-        logId: LogId,
-        master: string,
+        logId: LogId
+        master: string
         replicas?: string[]
         type: string
     }) {
         if (LOG_TYPE_MAP[type]) {
             this.type = LOG_TYPE_MAP[type]
-        }
-        else {
+        } else {
             throw new Error(`Unknown log type: ${type}`)
         }
         this.logId = logId

@@ -1,6 +1,6 @@
-import LogEntry from "../log-entry";
-import LogId from "../log-id";
-import { EntryType, Writable } from "../types";
+import LogEntry from "../log-entry"
+import LogId from "../log-id"
+import { EntryType, Writable } from "../types"
 
 const TYPE_BYTE = new Uint8Array([EntryType.GLOBAL_LOG])
 
@@ -8,13 +8,7 @@ export default class GlobalLogEntry extends LogEntry {
     logId: LogId
     entry: Writable
 
-    constructor({
-        logId,
-        entry
-    } : {
-        logId: LogId
-        entry: Writable
-    }) {
+    constructor({ logId, entry }: { logId: LogId; entry: Writable }) {
         super()
         this.logId = logId
         this.entry = entry
@@ -30,7 +24,7 @@ export default class GlobalLogEntry extends LogEntry {
         return [
             TYPE_BYTE,
             this.logId.logId,
-            new Uint8Array( new Uint16Array([ this.entry.byteLength() ]).buffer ),
+            new Uint8Array(new Uint16Array([this.entry.byteLength()]).buffer),
             ...this.entry.u8s(),
             this.entry.crc32(),
         ]

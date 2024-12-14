@@ -1,7 +1,7 @@
-import { crc32 } from '@node-rs/crc32';
+import { crc32 } from "@node-rs/crc32"
 
-import LogEntry from "../log-entry";
-import { EntryType } from "../types";
+import LogEntry from "../log-entry"
+import { EntryType } from "../types"
 
 const TYPE_BYTE = new Uint8Array([EntryType.BINARY])
 
@@ -19,11 +19,13 @@ export default class BinaryLogEntry extends LogEntry {
     }
 
     crc32(): Uint8Array {
-        return new Uint8Array(new Uint32Array([crc32(this.u8, crc32(TYPE_BYTE))]).buffer)
+        return new Uint8Array(
+            new Uint32Array([crc32(this.u8, crc32(TYPE_BYTE))]).buffer,
+        )
     }
 
     u8s(): Uint8Array[] {
-        return [ TYPE_BYTE, this.u8 ]
+        return [TYPE_BYTE, this.u8]
     }
 
     static fromU8(u8: Uint8Array): BinaryLogEntry {

@@ -5,9 +5,9 @@ import LogId from "./log-id"
  * Provides methods to get byte length, byte arrays and CRC32 checksum.
  */
 export interface Writable {
-    byteLength: () => number,
-    u8s: () => Uint8Array[],
-    crc32: () => Uint8Array,
+    byteLength: () => number
+    u8s: () => Uint8Array[]
+    crc32: () => Uint8Array
 }
 
 /**
@@ -38,15 +38,15 @@ export const enum EntryType {
  * Every log has a type which is included in the config JSON
  */
 export const enum LogType {
-    BINARY="binary",
-    JSON="json",
-    GLOBAL="global",
+    BINARY = "binary",
+    JSON = "json",
+    GLOBAL = "global",
 }
 
 export const LOG_TYPE_MAP: { [index: string]: LogType } = {
-    'binary': LogType.BINARY,
-    'json': LogType.JSON,
-    'global': LogType.GLOBAL,
+    binary: LogType.BINARY,
+    json: LogType.JSON,
+    global: LogType.GLOBAL,
 }
 
 /**
@@ -55,9 +55,9 @@ export const LOG_TYPE_MAP: { [index: string]: LogType } = {
  * error will be populated if the entry could not be written.
  */
 export type WriteQueueItem = {
-    logId: LogId,
-    entry: Writable,
-    error?: any,
+    logId: LogId
+    entry: Writable
+    error?: any
 }
 
 /**
@@ -69,11 +69,11 @@ export type WriteQueueItem = {
  * the reader to complete the operation.
  */
 export type ReadQueueItem = {
-    logId: LogId,
-    reads: number[],
-    promise: Promise<Uint8Array[]>,
-    resolve: (value: Uint8Array[] | PromiseLike<Uint8Array[]>) => void,
-    reject: (reason?: any) => void,
+    logId: LogId
+    reads: number[]
+    promise: Promise<Uint8Array[]>
+    resolve: (value: Uint8Array[] | PromiseLike<Uint8Array[]>) => void
+    reject: (reason?: any) => void
 }
 
 /**
@@ -81,7 +81,7 @@ export type ReadQueueItem = {
  */
 export class AbortWriteError extends Error {
     constructor() {
-        super('Write Aborted')
+        super("Write Aborted")
     }
 }
 
@@ -93,7 +93,7 @@ export interface ILogConfig {
 }
 
 /**
- * 
+ *
  */
 export type PersistLogArgs = {
     config: ILogConfig

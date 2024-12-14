@@ -1,24 +1,29 @@
 import CommandLogEntry from "../../command-log-entry"
 
 export type U32CommandTypeArgs = {
-    commandNameU8?: Uint8Array,
-    commandValueU8?: Uint8Array,
-    value?: number,
+    commandNameU8?: Uint8Array
+    commandValueU8?: Uint8Array
+    value?: number
 }
 
 export default class U32CommandType extends CommandLogEntry {
     constructor(args: U32CommandTypeArgs) {
         if (args.commandNameU8 && args.commandValueU8) {
-            super({ commandNameU8: args.commandNameU8, commandValueU8: args.commandValueU8 })
-        }
-        else if (args.commandNameU8 && args.value !== undefined) {
             super({
                 commandNameU8: args.commandNameU8,
-                commandValueU8: new Uint8Array(new Uint32Array([args.value]).buffer)
+                commandValueU8: args.commandValueU8,
             })
-        }
-        else {
-            throw new Error("U32CommandType requires commandNameU8 and either commandValueU8 or value")
+        } else if (args.commandNameU8 && args.value !== undefined) {
+            super({
+                commandNameU8: args.commandNameU8,
+                commandValueU8: new Uint8Array(
+                    new Uint32Array([args.value]).buffer,
+                ),
+            })
+        } else {
+            throw new Error(
+                "U32CommandType requires commandNameU8 and either commandValueU8 or value",
+            )
         }
     }
 
@@ -28,7 +33,7 @@ export default class U32CommandType extends CommandLogEntry {
             // to get the correct alignment because 32 must be aligned to 4 byte intervals
             this.commandValueU8.buffer.byteLength > 4
                 ? this.commandValueU8.slice(0, 4).buffer
-                : this.commandValueU8.buffer
+                : this.commandValueU8.buffer,
         )[0]
     }
 

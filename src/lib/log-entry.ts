@@ -1,6 +1,5 @@
 export default class LogEntry {
-    constructor() {
-    }
+    constructor() {}
 
     u8s(): Uint8Array[] {
         return []
