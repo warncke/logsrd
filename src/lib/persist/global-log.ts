@@ -1,4 +1,4 @@
-import { WriteQueueItem } from "../globals"
+import { LogIndex, WriteQueueItem } from "../globals"
 import LogEntry from "../log-entry"
 import LogId from "../log-id"
 import GlobalLogReader from "./global-log-reader"
@@ -7,8 +7,8 @@ import PersistLog from "./persist-log"
 import WriteQueue from "./write-queue"
 
 export default class GlobalLog extends PersistLog {
-    // map of logId.base64() to array of offset,length,... values for each entry
-    index: Map<string, Array<number>> = new Map()
+    // map of logId.base64() to LogIndex
+    index: Map<string, LogIndex> = new Map()
 
     async append(logId: LogId, entry: LogEntry): Promise<void> {
         if (this.writeQueue === null) {

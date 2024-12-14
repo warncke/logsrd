@@ -144,3 +144,12 @@ export const GLOBAL_LOG_CHECKPOINT_INTERVAL = 128 * 1024
  * Write a checkpoint entry to the log at the beginning of every 128KB block
  */
 export const LOG_LOG_CHECKPOINT_INTERVAL = 128 * 1024
+
+/**
+ *
+ */
+export type LogIndex = {
+    en: Array<number>
+    cm: Array<number>
+    lc: Array<number>
+}

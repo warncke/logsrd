@@ -6,7 +6,7 @@ import LogId from "../log-id"
 const TYPE_BYTE = new Uint8Array([EntryType.GLOBAL_LOG])
 
 // every entry is prefixed with 1 byte entry type + 16 byte logId + 2 byte length + 4 byte crc
-const PREFIX_BYTE_LENGTH = 23
+export const PREFIX_BYTE_LENGTH = 23
 
 export default class GlobalLogEntry extends LogEntry {
     logId: LogId
