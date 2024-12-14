@@ -57,7 +57,9 @@ export default class GlobalLogEntry extends LogEntry {
         try {
             const logId = new LogId(new Uint8Array(u8.buffer, u8.byteOffset + 1, 16))
             const crc32 = new Uint8Array(u8.buffer.slice(u8.byteOffset + 19, u8.byteOffset + 23))
-            const entry = LogEntryFactory.fromU8(u8)
+            const entry = LogEntryFactory.fromU8(
+                new Uint8Array(u8.buffer, u8.byteOffset + PREFIX_BYTE_LENGTH, entryLength),
+            )
             return { entry: new GlobalLogEntry({ logId, entry, crc32 }) }
         } catch (err: any) {
             return { err }

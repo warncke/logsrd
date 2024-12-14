@@ -68,34 +68,48 @@ export default class GlobalLogWriter {
                     logId: item.logId,
                     entry: item.entry,
                 })
-                // if this write would cross a checkpoint boundary then split it and add a checkpoint at the boundary
-                if (checkpointOffset + writeBytes + globalLogEntry.byteLength() > GLOBAL_LOG_CHECKPOINT_INTERVAL) {
-                    // use Buffer here because this will never run in browser
-                    const entryBuffer = Buffer.concat(globalLogEntry.u8s(), globalLogEntry.byteLength())
+                // bytes since last checkpoint including this entry
+                const bytesSinceCheckpoint = checkpointOffset + writeBytes + globalLogEntry.byteLength()
+                // if this entry would cross or end at checkpoint boundardy then add checkpoint
+                if (bytesSinceCheckpoint >= GLOBAL_LOG_CHECKPOINT_INTERVAL) {
                     // length of buffer segment to write before checkpoint
-                    const lastEntryOffset =
-                        checkpointOffset + writeBytes + globalLogEntry.byteLength() - GLOBAL_LOG_CHECKPOINT_INTERVAL
-                    // add beginning segment of entry before checkpoint
-                    u8s.push(entryBuffer.slice(0, lastEntryOffset))
-                    writeBytes += lastEntryOffset
-                    // offset becomes negative because now we need an additional GLOBAL_LOG_CHECKPOINT_INTERVAL
-                    // bytes before the next offset
-                    checkpointOffset = -writeBytes
+                    const lastEntryOffset = bytesSinceCheckpoint - GLOBAL_LOG_CHECKPOINT_INTERVAL
                     // create checkpoint entry
                     const checkpointEntry = new GlobalLogCheckpoint({
                         lastEntryOffset,
-                        lastEntryLength: entryBuffer.byteLength,
+                        lastEntryLength: globalLogEntry.byteLength(),
                     })
-                    u8s.push(...checkpointEntry.u8s())
-                    writeBytes += checkpointEntry.byteLength()
-                    // add end segment of entry after checkpoint
-                    u8s.push(entryBuffer.slice(lastEntryOffset))
-                    writeBytes += entryBuffer.byteLength - lastEntryOffset
+                    // offset becomes negative because now we need an additional GLOBAL_LOG_CHECKPOINT_INTERVAL
+                    // bytes before the next offset
+                    checkpointOffset = -(writeBytes + lastEntryOffset)
+                    // if entry ends directly at checkpoint then add before
+                    if (lastEntryOffset === globalLogEntry.byteLength()) {
+                        // add log entry
+                        u8s.push(...globalLogEntry.u8s())
+                        writeBytes += globalLogEntry.byteLength()
+                        // add checkpoint entry
+                        u8s.push(...checkpointEntry.u8s())
+                        writeBytes += checkpointEntry.byteLength()
+                    }
+                    // otherwise split entry and add before/after checkpoint
+                    else {
+                        // use Buffer here because this will never run in browser
+                        const entryBuffer = Buffer.concat(globalLogEntry.u8s(), globalLogEntry.byteLength())
+                        // add beginning segment of entry before checkpoint
+                        u8s.push(entryBuffer.slice(0, lastEntryOffset))
+                        writeBytes += lastEntryOffset
+                        // add checkpoint entry
+                        u8s.push(...checkpointEntry.u8s())
+                        writeBytes += checkpointEntry.byteLength()
+                        // add end segment of entry after checkpoint
+                        u8s.push(entryBuffer.slice(lastEntryOffset))
+                        writeBytes += entryBuffer.byteLength - lastEntryOffset
+                    }
                 }
                 // otherwise add entry
                 else {
-                    writeBytes += globalLogEntry.byteLength()
                     u8s.push(...globalLogEntry.u8s())
+                    writeBytes += globalLogEntry.byteLength()
                 }
             }
             // write buffers
