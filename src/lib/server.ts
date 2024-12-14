@@ -1,5 +1,3 @@
-import "core-js/actual/typed-array/to-base64"
-
 import Log from "./log"
 import LogConfig from "./log-config"
 import LogId from "./log-id"
