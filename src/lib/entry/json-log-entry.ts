@@ -1,3 +1,5 @@
+import { crc32 } from '@node-rs/crc32';
+
 import LogEntry from "../log-entry";
 import { EntryType } from "../types";
 
@@ -29,6 +31,10 @@ export default class JSONLogEntry extends LogEntry {
     byteLength(): number {
         // entry length is: 1 byte entry type + json.length
         return 1 + this.jsonU8().byteLength
+    }
+
+    crc32(): Uint8Array {
+        return new Uint8Array(new Uint32Array([crc32(this.jsonU8(), crc32(TYPE_BYTE))]).buffer)
     }
 
     jsonU8(): Uint8Array {

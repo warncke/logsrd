@@ -1,9 +1,5 @@
-import { WriteQueueItem } from "../types";
+import { WriteQueueItem, Writable } from "../types";
 
-export interface Writable {
-    byteLength: () => number,
-    u8s: () => Uint8Array[],
-}
 export default class WriteQueue {
     promise: Promise<void>
     resolve: Function|null = null

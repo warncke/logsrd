@@ -1,5 +1,4 @@
 import crypto from 'mz/crypto';
-import { FileHandle } from 'node:fs/promises';
 
 class LogId {
     #base64: string | null = null;

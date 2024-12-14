@@ -1,5 +1,14 @@
 import LogId from "./log-id"
-import { Writable } from "./persist/write-queue"
+
+/**
+ * Interface for objects that can be written to a log.
+ * Provides methods to get byte length, byte arrays and CRC32 checksum.
+ */
+export interface Writable {
+    byteLength: () => number,
+    u8s: () => Uint8Array[],
+    crc32: () => Uint8Array,
+}
 
 /**
  * Every CommandLogEntry begins with a single byte interpreted as a little endian unsigned integer
@@ -19,6 +28,7 @@ export const enum CommandName {
  */
 
 export const enum EntryType {
+    GLOBAL_LOG,
     COMMAND,
     BINARY,
     JSON,

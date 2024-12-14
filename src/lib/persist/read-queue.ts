@@ -1,9 +1,5 @@
 import { ReadQueueItem } from "../types";
 
-export interface Writable {
-    byteLength: () => number,
-    u8s: () => Uint8Array[],
-}
 export default class ReadQueue {
     queue: ReadQueueItem[] = [];
 

@@ -1,11 +1,8 @@
 import fs from 'node:fs/promises'
 
 import WriteQueue from "./write-queue";
-import BeginWriteCommand from '../entry/command/begin-write-command';
-import EndWriteCommand from '../entry/command/end-write-command';
-import AbortWriteCommand from '../entry/command/abort-write-command';
-import { AbortWriteError } from '../types';
 import GlobalLog from './global-log';
+import GlobalLogEntry from '../entry/global-log-entry';
 
 export default class GlobalLogWriter {
     static async write(log: GlobalLog): Promise<void> {
@@ -36,47 +33,22 @@ export default class GlobalLogWriter {
             let totalBytes = 0
             // add all items from queue to list of u8s to write
             for (const item of writeQueue.queue) {
-                // add logId buffer first
-                totalBytes += item.logId.byteLength()
-                u8s.push(item.logId.logId)
-                // get combined length of all u8s in LogEntry
-                const byteLength = item.entry.byteLength()
-                const lengthBytes = new Uint8Array(
-                    new Uint16Array([byteLength]).buffer
-                )
-                // add length bytes before entry data
-                totalBytes += lengthBytes.byteLength
-                u8s.push(lengthBytes)
-                // add offset and length of entry to index
-                if (logs.has(item.logId.base64())) {
-                    const offsets = logs.get(item.logId.base64())
-                    offsets!.push(totalBytes, byteLength)
-                }
-                else {
-                    logs.set(item.logId.base64(), [totalBytes, byteLength])
-                }
-                // add entry data
-                u8s.push(...item.entry.u8s())
-                totalBytes += byteLength
-                // add length bytes after entry data
-                totalBytes += lengthBytes.byteLength
-                u8s.push(lengthBytes)
+                // create global log entry
+                const globalLogEntry = new GlobalLogEntry({
+                    logId: item.logId,
+                    entry: item.entry
+                })
+                totalBytes += globalLogEntry.byteLength()
+                u8s.push(...globalLogEntry.u8s())
             }
-            // add begin write command that will be written first
-            const beginWrite = new BeginWriteCommand({value: totalBytes})
-            u8s.unshift(
-                ...beginWrite.u8s()
-            )
-            // add end write command
-            const endWrite = new EndWriteCommand({value: totalBytes})
-            u8s.push(
-                ...endWrite.u8s()
-            )
-            totalBytes += endWrite.byteLength()
             // write buffers
             const ret = await log.fh.writev(u8s)
             // sync data only as we do not care about metadata
             await log.fh.datasync()
+
+            if (ret.bytesWritten !== totalBytes) {
+                throw new Error(`Failed to write all bytes. Expected: ${totalBytes} Actual: ${ret.bytesWritten}`)
+            }
 
             for (const [logId, offsets] of logs) {
                 if (log.index.has(logId)) {
