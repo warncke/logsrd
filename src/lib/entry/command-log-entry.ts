@@ -1,7 +1,7 @@
 import { crc32 } from "@node-rs/crc32"
 
+import { EntryType } from "../globals"
 import LogEntry from "../log-entry"
-import { EntryType } from "../types"
 
 const TYPE_BYTE = new Uint8Array([EntryType.COMMAND])
 export default class CommandLogEntry extends LogEntry {
@@ -25,7 +25,7 @@ export default class CommandLogEntry extends LogEntry {
         return 2 + this.commandValueU8.byteLength
     }
 
-    crc32(): Uint8Array {
+    cksum(): Uint8Array {
         return new Uint8Array(
             new Uint32Array([
                 crc32(
@@ -38,9 +38,5 @@ export default class CommandLogEntry extends LogEntry {
 
     u8s(): Uint8Array[] {
         return [TYPE_BYTE, this.commandNameU8, this.commandValueU8]
-    }
-
-    static fromU8(u8: Uint8Array): LogEntry {
-        throw new Error("Not implemented")
     }
 }

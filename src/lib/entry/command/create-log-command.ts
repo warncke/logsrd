@@ -1,4 +1,4 @@
-import { CommandName } from "../../types"
+import { CommandName } from "../../globals"
 import JSONCommandType, {
     JSONCommandTypeArgs,
 } from "./command-type/json-command-type"

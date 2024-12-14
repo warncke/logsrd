@@ -1,7 +1,7 @@
 import fs from "node:fs/promises"
 
+import { PersistLogArgs } from "../globals"
 import LogId from "../log-id"
-import { PersistLogArgs } from "../types"
 import PersistLog from "./persist-log"
 
 export default class LogLog extends PersistLog {

@@ -1,22 +1,5 @@
-import { CommandName } from "../types"
+import { COMMAND_CLASS } from "../globals"
 import CommandLogEntry from "./command-log-entry"
-import BeginWriteCommand from "./command/begin-write-command"
-import CreateLogCommand from "./command/create-log-command"
-import EndWriteCommand from "./command/end-write-command"
-import SetConfigCommand from "./command/set-config-command"
-
-type COMMAND_CLASSES =
-    | typeof CreateLogCommand
-    | typeof SetConfigCommand
-    | typeof BeginWriteCommand
-    | typeof EndWriteCommand
-
-const COMMAND_CLASS: { [index: number]: COMMAND_CLASSES } = {
-    [CommandName.CREATE_LOG]: CreateLogCommand,
-    [CommandName.SET_CONFIG]: SetConfigCommand,
-    [CommandName.BEGIN_WRITE]: BeginWriteCommand,
-    [CommandName.END_WRITE]: EndWriteCommand,
-}
 
 export default class CommandLogEntryFactory {
     static fromU8(u8: Uint8Array): CommandLogEntry {

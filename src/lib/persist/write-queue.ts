@@ -1,4 +1,4 @@
-import { Writable, WriteQueueItem } from "../types"
+import { Writable, WriteQueueItem } from "../globals"
 
 export default class WriteQueue {
     promise: Promise<void>

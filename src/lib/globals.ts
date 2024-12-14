@@ -1,3 +1,12 @@
+import BinaryLogEntry from "./entry/binary-log-entry"
+import CommandLogEntry from "./entry/command-log-entry"
+import CreateLogCommand from "./entry/command/create-log-command"
+import SetConfigCommand from "./entry/command/set-config-command"
+import GlobalLogCheckpoint from "./entry/global-log-checkpoint"
+import GlobalLogEntry from "./entry/global-log-entry"
+import JSONLogEntry from "./entry/json-log-entry"
+import LogLogCheckpoint from "./entry/log-log-checkpoint"
+import LogLogEntry from "./entry/log-log-entry"
 import LogId from "./log-id"
 
 /**
@@ -7,7 +16,7 @@ import LogId from "./log-id"
 export interface Writable {
     byteLength: () => number
     u8s: () => Uint8Array[]
-    crc32: () => Uint8Array
+    cksum: () => Uint8Array
 }
 
 /**
@@ -17,9 +26,13 @@ export interface Writable {
 export const enum CommandName {
     CREATE_LOG,
     SET_CONFIG,
-    BEGIN_WRITE,
-    END_WRITE,
-    ABORT_WRITE,
+}
+
+export type COMMAND_CLASSES = typeof CreateLogCommand | typeof SetConfigCommand
+
+export const COMMAND_CLASS: { [index: number]: COMMAND_CLASSES } = {
+    [CommandName.CREATE_LOG]: CreateLogCommand,
+    [CommandName.SET_CONFIG]: SetConfigCommand,
 }
 
 /**
@@ -29,9 +42,31 @@ export const enum CommandName {
 
 export const enum EntryType {
     GLOBAL_LOG,
+    LOG_LOG,
+    GLOBAL_LOG_CHECKPOINT,
+    LOG_LOG_CHECKPOINT,
     COMMAND,
     BINARY,
     JSON,
+}
+
+export type ENTRY_TYPE_CLASSES =
+    | typeof GlobalLogEntry
+    | typeof LogLogEntry
+    | typeof GlobalLogCheckpoint
+    | typeof LogLogCheckpoint
+    | typeof CommandLogEntry
+    | typeof BinaryLogEntry
+    | typeof JSONLogEntry
+
+export const ENTRY_CLASS: { [index: number]: ENTRY_TYPE_CLASSES } = {
+    [EntryType.GLOBAL_LOG]: GlobalLogEntry,
+    [EntryType.LOG_LOG]: LogLogEntry,
+    [EntryType.GLOBAL_LOG_CHECKPOINT]: GlobalLogCheckpoint,
+    [EntryType.LOG_LOG_CHECKPOINT]: LogLogCheckpoint,
+    [EntryType.COMMAND]: CommandLogEntry,
+    [EntryType.BINARY]: BinaryLogEntry,
+    [EntryType.JSON]: JSONLogEntry,
 }
 
 /**
@@ -99,3 +134,13 @@ export type PersistLogArgs = {
     config: ILogConfig
     logFile: string
 }
+
+/**
+ * Write a checkpoint entry to the global log at the beginning of every 128KB block
+ */
+export const GLOBAL_LOG_CHECKPOINT_INTERVAL = 128 * 1024
+
+/**
+ * Write a checkpoint entry to the log at the beginning of every 128KB block
+ */
+export const LOG_LOG_CHECKPOINT_INTERVAL = 128 * 1024

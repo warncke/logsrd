@@ -1,5 +1,5 @@
+import { ILogConfig, LOG_TYPE_MAP, LogType } from "./globals"
 import LogId from "./log-id"
-import { ILogConfig, LOG_TYPE_MAP, LogType } from "./types"
 
 export const SCHEMA = {
     type: "object",

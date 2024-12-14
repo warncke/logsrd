@@ -1,6 +1,6 @@
+import { WriteQueueItem } from "../globals"
 import LogEntry from "../log-entry"
 import LogId from "../log-id"
-import { WriteQueueItem } from "../types"
 import GlobalLogReader from "./global-log-reader"
 import GlobalLogWriter from "./global-log-writer"
 import PersistLog from "./persist-log"

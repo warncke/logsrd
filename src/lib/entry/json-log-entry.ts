@@ -1,7 +1,7 @@
 import { crc32 } from "@node-rs/crc32"
 
+import { EntryType } from "../globals"
 import LogEntry from "../log-entry"
-import { EntryType } from "../types"
 
 const TYPE_BYTE = new Uint8Array([EntryType.JSON])
 
@@ -31,7 +31,7 @@ export default class JSONLogEntry extends LogEntry {
         return 1 + this.jsonU8().byteLength
     }
 
-    crc32(): Uint8Array {
+    cksum(): Uint8Array {
         return new Uint8Array(
             new Uint32Array([crc32(this.jsonU8(), crc32(TYPE_BYTE))]).buffer,
         )

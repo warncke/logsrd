@@ -1,4 +1,4 @@
-import { ReadQueueItem } from "../types"
+import { ReadQueueItem } from "../globals"
 
 export default class ReadQueue {
     queue: ReadQueueItem[] = []

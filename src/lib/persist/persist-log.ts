@@ -1,7 +1,7 @@
 import { FileHandle } from "node:fs/promises"
 
+import { PersistLogArgs } from "../globals"
 import LogConfig from "../log-config"
-import { PersistLogArgs } from "../types"
 import ReadQueue from "./read-queue"
 import WriteQueue from "./write-queue"
 
