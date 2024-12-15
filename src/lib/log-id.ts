@@ -4,7 +4,10 @@ class LogId {
     #base64: string | null = null
     logId: Uint8Array
 
-    constructor(logId: Uint8Array) {
+    constructor(logId: Uint8Array, base64?: string) {
+        if (base64) {
+            this.#base64 = base64
+        }
         this.logId = logId
     }
 
@@ -31,6 +34,16 @@ class LogId {
         // generate new random id
         // TODO: browser compatibility
         return new LogId(await crypto.randomBytes(16))
+    }
+
+    static newFromBase64(base64: string) {
+        // TODO: browser compatibility
+        const logIdU8 = Buffer.from(base64, "base64url")
+        if (logIdU8.byteLength === 16) {
+            return new LogId(logIdU8, base64)
+        } else {
+            throw new Error("Invalid log id")
+        }
     }
 }
 

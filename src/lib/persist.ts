@@ -1,7 +1,9 @@
 import fs from "node:fs/promises"
 import path from "path"
 
+import JSONCommandType from "./entry/command/command-type/json-command-type"
 import CreateLogCommand from "./entry/command/create-log-command"
+import SetConfigCommand from "./entry/command/set-config-command"
 import LogConfig from "./log-config"
 import LogEntry from "./log-entry"
 import LogId from "./log-id"
@@ -168,6 +170,24 @@ export default class Persist {
 
     async deleteLog(logId: LogId): Promise<boolean> {
         return false
+    }
+
+    async getConfig(logId: LogId): Promise<CreateLogCommand | SetConfigCommand | null> {
+        // order of persistence is hot > cold > log
+        // try to get from hot log
+        let logIndex = this.hotLog.index.get(logId.base64())
+        if (logIndex && logIndex.lc.length > 0) {
+            const logEntry = await this.hotLog.getEntry(logId, logIndex.lc[0], logIndex.lc[1])
+            return logEntry instanceof CreateLogCommand || logEntry instanceof SetConfigCommand ? logEntry : null
+        }
+        // try to get from cold log
+        logIndex = this.coldLog.index.get(logId.base64())
+        if (logIndex && logIndex.lc.length > 0) {
+            const logEntry = await this.coldLog.getEntry(logId, logIndex.lc[0], logIndex.lc[1])
+            return logEntry instanceof CreateLogCommand || logEntry instanceof SetConfigCommand ? logEntry : null
+        }
+        // TODO: get from log log
+        return null
     }
 
     // async openLog({ logId }: { logId: LogId }): Promise<PersistLog|null> {

@@ -45,8 +45,12 @@ export default class JSONLogEntry extends LogEntry {
     }
 
     static fromU8(u8: Uint8Array): JSONLogEntry {
+        const entryType: number | undefined = u8.at(0)
+        if (entryType !== EntryType.JSON) {
+            throw new Error(`Invalid entryType: ${entryType}`)
+        }
         return new JSONLogEntry({
-            jsonU8: u8,
+            jsonU8: new Uint8Array(u8.buffer, u8.byteOffset + 1, u8.byteLength - 1),
         })
     }
 }

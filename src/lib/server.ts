@@ -16,13 +16,19 @@ export default class Server {
         this.persist = persist
     }
 
-    async createLog({ config }: { config: any }): Promise<LogConfig | null> {
-        config = await Log.create({ config, server: this })
+    async createLog(config: any): Promise<LogConfig | null> {
+        config = await Log.create(this, config)
         return config === null ? null : config
     }
 
+    async getConfig(logId: LogId): Promise<LogConfig | null> {
+        const log = new Log(this, logId)
+        // TODO: authentication
+        return log.getConfig()
+    }
+
     async deleteLog(logId: LogId): Promise<boolean> {
-        const log = new Log({ logId, persist: this.persist })
+        const log = new Log(this, logId)
         return await log.delete()
     }
 }

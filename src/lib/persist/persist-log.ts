@@ -10,7 +10,8 @@ export default class PersistLog {
     // write file handle
     fh: FileHandle | null = null
     // read file handles
-    readFhs: Array<FileHandle> = []
+    busyReadFhs: Array<FileHandle> = []
+    freeReadFhs: Array<FileHandle> = []
     // file name of log
     logFile: string
     // length of file. for global log files, where the entire file is read and

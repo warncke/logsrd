@@ -4,14 +4,14 @@ import CommandLogEntry from "../entry/command-log-entry"
 import CreateLogCommand from "../entry/command/create-log-command"
 import SetConfigCommand from "../entry/command/set-config-command"
 import GlobalLogCheckpoint from "../entry/global-log-checkpoint"
-import GlobalLogEntry, { PREFIX_BYTE_LENGTH } from "../entry/global-log-entry"
+import GlobalLogEntry from "../entry/global-log-entry"
 import { GLOBAL_LOG_CHECKPOINT_INTERVAL, LogIndex } from "../globals"
 import GlobalLog from "./global-log"
 import WriteQueue from "./write-queue"
 
 export default class GlobalLogWriter {
-    static async write(log: GlobalLog): Promise<void> {
-        if (log.writeInProgress) {
+    static async processWriteQueue(log: GlobalLog): Promise<void> {
+        if (log.writeBlocked || log.writeInProgress) {
             return
         }
         if (log.writeQueue === null) {
@@ -52,12 +52,15 @@ export default class GlobalLogWriter {
                     })
                 }
                 const logIndex = index.get(item.logId.base64())!
-                // offset of entry is after the global log entry prefix
-                const entryOffset = log.byteLength + writeBytes + PREFIX_BYTE_LENGTH
+                // offset of entry includes GLOBAL_LOG_ENTRY_PREFIX
+                const entryOffset = log.byteLength + writeBytes
                 // create log and set config both store the current log config we only need most recent
                 if (item.entry instanceof CreateLogCommand || item.entry instanceof SetConfigCommand) {
+                    // within a set of combined writes the last config will always be the most recent
                     logIndex.lc[0] = entryOffset
                     logIndex.lc[1] = item.entry.byteLength()
+                    // also add to command entries
+                    logIndex.cm.push(entryOffset, item.entry.byteLength())
                 } else if (item.entry instanceof CommandLogEntry) {
                     logIndex.cm.push(entryOffset, item.entry.byteLength())
                 } else {
@@ -126,7 +129,11 @@ export default class GlobalLogWriter {
                     const globalLogIndex = log.index.get(logId)!
                     globalLogIndex.en.push(...logIndex.en)
                     globalLogIndex.cm.push(...logIndex.cm)
-                    if (logIndex.lc.length > 0) {
+                    // if a log config was written and the global index is empty or the global config is older then update
+                    if (
+                        logIndex.lc.length > 0 &&
+                        (globalLogIndex.lc.length === 0 || globalLogIndex.lc[0] < logIndex.lc[0])
+                    ) {
                         globalLogIndex.lc[0] = logIndex.lc[0]
                         globalLogIndex.lc[1] = logIndex.lc[1]
                     }
@@ -153,7 +160,7 @@ export default class GlobalLogWriter {
         log.writeInProgress = null
         // if new write queue has any items then process it on next tick
         if (log.writeQueue !== null && log.writeQueue.queue.length > 0) {
-            setTimeout(() => GlobalLogWriter.write(log), 0)
+            setTimeout(GlobalLogWriter.processWriteQueue, 0, log)
         }
     }
 }

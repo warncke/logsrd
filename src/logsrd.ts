@@ -1,5 +1,7 @@
 import uWS, { HttpResponse } from "uWebSockets.js"
 
+import Log from "./lib/log"
+import LogId from "./lib/log-id"
 import Persist from "./lib/persist"
 import Server from "./lib/server"
 
@@ -9,6 +11,13 @@ const port = parseInt(process.env.PORT || "7000")
 const version = "0.0.1"
 
 run().catch(console.error)
+
+const JSON_REQUIRED_ERROR = "Content-Type: application/json required"
+const LOG_CREATE_ERROR = "Failed to create log"
+const INVALID_JSON_POST_ERROR = "Aborted: invalid JSON or no data"
+const INVALID_LOG_ID_ERROR = "Invalid log id"
+const LOG_NOT_FOUND_ERROR = "Log not found"
+const SERVER_ERROR = "Server error"
 
 async function run(): Promise<void> {
     const persist = new Persist({
@@ -31,11 +40,11 @@ async function run(): Promise<void> {
 
     /* Create Log */
     logsrd.post("/log", async (res, req) => {
-        let contentType = req.getHeader("content-type")
+        const contentType = req.getHeader("content-type")
         if (!contentType.startsWith("application/json")) {
             res.cork(() => {
                 res.writeStatus("400")
-                res.end("Content-Type: application/json required")
+                res.end(JSON_REQUIRED_ERROR)
             })
             return
         }
@@ -45,11 +54,11 @@ async function run(): Promise<void> {
             res,
             async (data: any) => {
                 try {
-                    const config = await server.createLog({ config: data })
+                    const config = await server.createLog(data)
                     if (config === null) {
                         res.cork(() => {
                             res.writeStatus("400")
-                            res.end(JSON.stringify({ error: "failed to create log" }, null, 2))
+                            res.end(JSON.stringify({ error: LOG_CREATE_ERROR }))
                         })
                     } else {
                         res.cork(() => {
@@ -59,34 +68,81 @@ async function run(): Promise<void> {
                 } catch (err: any) {
                     res.cork(() => {
                         res.writeStatus("400")
-                        res.end(JSON.stringify({ error: err.message, stack: err.stack }, null, 2))
+                        res.end(JSON.stringify({ error: err.message, stack: err.stack }))
                     })
                 }
             },
             () => {
                 res.cork(() => {
                     res.writeStatus("400")
-                    res.end(JSON.stringify({ error: "aborted: invalid JSON or no data" }, null, 2))
+                    res.end(JSON.stringify({ error: INVALID_JSON_POST_ERROR }))
                 })
             },
         )
     })
 
     /* Get Log Config */
-    logsrd.get("/log/:logid/config", async (res, req) => {})
+    logsrd.get("/log/:logid/config", (res, req) => {
+        let contentType = req.getHeader("content-type")
+        const expectJSON = contentType.startsWith("application/json")
+        const logIdBase64 = req.getParameter(0)
+
+        if (!logIdBase64 || logIdBase64.length !== 22) {
+            res.cork(() => {
+                res.writeStatus("404")
+                expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
+            })
+            return
+        }
+
+        const logId = LogId.newFromBase64(logIdBase64)
+        server
+            .getConfig(logId)
+            .then((config) => {
+                if (config === null) {
+                    res.cork(() => {
+                        res.writeStatus("404")
+                        expectJSON
+                            ? res.end(JSON.stringify({ error: LOG_NOT_FOUND_ERROR }))
+                            : res.end(LOG_NOT_FOUND_ERROR)
+                    })
+                } else {
+                    res.cork(() => {
+                        res.end(JSON.stringify(config))
+                    })
+                }
+            })
+            .catch((err: any) => {
+                res.cork(() => {
+                    res.writeStatus("400")
+                    expectJSON
+                        ? res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                        : res.end(err.message)
+                })
+            })
+
+        res.onAborted(() => {
+            res.writeStatus("500")
+            expectJSON ? res.end(JSON.stringify({ error: SERVER_ERROR })) : res.end(SERVER_ERROR)
+        })
+    })
 
     /* Get entry(s) from log */
     logsrd.get("/log/:logid", async (res, req) => {})
 
     /* Get current version from server */
     logsrd.get("/version", async (res, req) => {
-        res.end(version)
+        res.cork(() => {
+            res.end(version)
+        })
     })
 
     /* Unhandled Routes */
     logsrd.get("/*", (res, req) => {
-        res.writeStatus("404")
-        res.end("not found")
+        res.cork(() => {
+            res.writeStatus("404")
+            res.end("Not found")
+        })
     })
 
     logsrd.listen(port, (token) => {

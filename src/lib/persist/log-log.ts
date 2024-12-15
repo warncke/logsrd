@@ -9,6 +9,7 @@ export default class LogLog extends PersistLog {
     // zero because logs can be partially read from end.
     index: Array<number> = []
     logId: LogId
+    maxReadFHs: number = 1
 
     constructor({ logId, ...args }: PersistLogArgs & { logId: LogId }) {
         super(args)

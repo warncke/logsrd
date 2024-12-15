@@ -1,30 +1,40 @@
+import JSONCommandType from "./entry/command/command-type/json-command-type"
 import CreateLogCommand from "./entry/command/create-log-command"
 import LogConfig from "./log-config"
 import LogEntry from "./log-entry"
 import LogId from "./log-id"
-import Persist from "./persist"
 import Server from "./server"
 
 export default class Log {
     logId: LogId
-    persist: Persist
+    server: Server
 
-    constructor({ logId, persist }: { logId: LogId; persist: Persist }) {
-        this.persist = persist
+    constructor(server: Server, logId: LogId) {
+        this.server = server
         this.logId = logId
     }
 
     async append(entry: LogEntry): Promise<void> {}
 
     async delete(): Promise<boolean> {
-        return this.persist.deleteLog(this.logId)
+        return false
     }
 
     async entries() {}
 
     async head() {}
 
-    static async create({ config, server }: { config: any; server: Server }): Promise<LogConfig | null> {
+    async getConfig(): Promise<LogConfig | null> {
+        const configLogEntry = await this.server.persist.getConfig(this.logId)
+        if (configLogEntry === null) {
+            return null
+        }
+        const config = configLogEntry.value()
+        // TODO: sanitize this
+        return new LogConfig(config)
+    }
+
+    static async create(server: Server, config: any): Promise<LogConfig | null> {
         const logId = await LogId.newRandom()
         config.logId = logId.base64()
         config.master = server.config.host

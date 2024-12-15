@@ -27,6 +27,10 @@ export default class BinaryLogEntry extends LogEntry {
     }
 
     static fromU8(u8: Uint8Array): BinaryLogEntry {
-        return new BinaryLogEntry(u8)
+        const entryType: number | undefined = u8.at(0)
+        if (entryType !== EntryType.BINARY) {
+            throw new Error(`Invalid entryType: ${entryType}`)
+        }
+        return new BinaryLogEntry(new Uint8Array(u8.buffer, u8.byteOffset + 1, u8.byteLength - 1))
     }
 }

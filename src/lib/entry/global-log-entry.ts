@@ -38,6 +38,18 @@ export default class GlobalLogEntry extends LogEntry {
         return this.crc32 === null ? false : new Uint32Array(this.crc32)[0] === new Uint32Array(this.entry.cksum())[0]
     }
 
+    static fromU8(u8: Uint8Array): GlobalLogEntry {
+        const entryType: number | undefined = u8.at(0)
+        if (entryType !== EntryType.GLOBAL_LOG) {
+            throw new Error(`Invalid entryType: ${entryType}`)
+        }
+        const logId = new LogId(new Uint8Array(u8.buffer, u8.byteOffset + 1, 16))
+        const entryLength = new Uint16Array(u8.buffer.slice(u8.byteOffset + 17, u8.byteOffset + 19))[0]
+        const crc32 = new Uint8Array(u8.buffer.slice(u8.byteOffset + 19, u8.byteOffset + 23))
+        const entry = LogEntryFactory.fromU8(new Uint8Array(u8.buffer, u8.byteOffset + PREFIX_BYTE_LENGTH, entryLength))
+        return new GlobalLogEntry({ logId, entry, crc32 })
+    }
+
     static fromPartialU8(u8: Uint8Array): {
         entry?: LogEntry | null
         needBytes?: number
@@ -52,6 +64,11 @@ export default class GlobalLogEntry extends LogEntry {
         const totalLength = entryLength + PREFIX_BYTE_LENGTH
         if (u8.length < totalLength) {
             return { needBytes: totalLength - u8.length }
+        }
+
+        const entryType: number | undefined = u8.at(0)
+        if (entryType !== EntryType.GLOBAL_LOG) {
+            return { err: new Error(`Invalid entryType: ${entryType}`) }
         }
 
         try {

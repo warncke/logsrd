@@ -9,12 +9,10 @@ export default class LogEntryFactory {
         if (entryType === undefined || !(entryType in ENTRY_CLASS)) {
             throw new Error(`Invalid entryType: ${entryType}`)
         } else {
-            // create buffer of entry data minus the type byte
-            const entryBuffer = new Uint8Array(u8.buffer, u8.byteOffset + 1, u8.byteLength - 1)
             if (entryType === EntryType.COMMAND) {
-                return CommandLogEntryFactory.fromU8(entryBuffer)
+                return CommandLogEntryFactory.fromU8(u8)
             } else {
-                return ENTRY_CLASS[entryType].fromU8(entryBuffer)
+                return ENTRY_CLASS[entryType].fromU8(u8)
             }
         }
     }
@@ -30,9 +28,7 @@ export default class LogEntryFactory {
         const entryType: number | undefined = u8.at(0)
         // should only be used with log entry types that have their length as part of their data
         if (entryType === EntryType.GLOBAL_LOG || entryType === EntryType.LOG_LOG) {
-            // create buffer of entry data minus the type byte
-            const entryBuffer = new Uint8Array(u8.buffer, u8.byteOffset + 1, u8.byteLength - 1)
-            return ENTRY_CLASS[entryType].fromPartialU8(entryBuffer)
+            return ENTRY_CLASS[entryType].fromPartialU8(u8)
         } else {
             return { err: new Error(`Invalid entryType: ${entryType}`) }
         }

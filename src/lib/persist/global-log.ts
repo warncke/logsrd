@@ -1,12 +1,15 @@
-import { LogIndex, WriteQueueItem } from "../globals"
+import GlobalLogEntry from "../entry/global-log-entry"
+import { LogIndex, ReadQueueItem, WriteQueueItem } from "../globals"
 import LogEntry from "../log-entry"
 import LogId from "../log-id"
 import GlobalLogReader from "./global-log-reader"
 import GlobalLogWriter from "./global-log-writer"
 import PersistLog from "./persist-log"
+import ReadQueue from "./read-queue"
 import WriteQueue from "./write-queue"
 
 export default class GlobalLog extends PersistLog {
+    maxReadFHs: number = 8
     // map of logId.base64() to LogIndex
     index: Map<string, LogIndex> = new Map()
 
@@ -22,8 +25,8 @@ export default class GlobalLog extends PersistLog {
         // know when it will be moved to in progress
         const promise = this.writeQueue.promise
         // if there is no write in progress then start writing now
-        if (!this.writeInProgress) {
-            GlobalLogWriter.write(this).catch((err) => {
+        if (!this.writeBlocked && !this.writeInProgress) {
+            GlobalLogWriter.processWriteQueue(this).catch((err) => {
                 // errors should be handled internally but add this for completeness
                 console.error(err)
             })
@@ -34,6 +37,26 @@ export default class GlobalLog extends PersistLog {
         if (item.error) {
             throw item.error
         }
+    }
+
+    async getEntry(logId: LogId, offset: number, length: number): Promise<LogEntry> {
+        if (this.readQueue === null) {
+            this.readQueue = new ReadQueue()
+        }
+        const item = this.readQueue.enqueue(logId, [offset, length])
+        // if there is no read in progress then start reading now
+        if (!this.readBlocked && !this.readInProgress) {
+            GlobalLogReader.processReadQueue(this)
+        }
+        const [entryU8] = await item.promise
+        const globalLogEntry = GlobalLogEntry.fromU8(entryU8)
+        if (globalLogEntry.logId.base64() !== logId.base64()) {
+            throw new Error("logId mismatch")
+        }
+        if (!globalLogEntry.verify()) {
+            throw new Error("cksum verify failed")
+        }
+        return globalLogEntry.entry
     }
 
     async init(): Promise<void> {
