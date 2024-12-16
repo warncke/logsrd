@@ -27,6 +27,8 @@ export interface Writable {
 export const enum CommandName {
     CREATE_LOG,
     SET_CONFIG,
+    BEGIN_COMPACT_COLD,
+    FINISH_COMPACT_COLD,
 }
 
 export type COMMAND_CLASSES = typeof CreateLogCommand | typeof SetConfigCommand
@@ -145,12 +147,3 @@ export const GLOBAL_LOG_CHECKPOINT_INTERVAL = 128 * 1024
  * Write a checkpoint entry to the log at the beginning of every 128KB block
  */
 export const LOG_LOG_CHECKPOINT_INTERVAL = 128 * 1024
-
-/**
- *
- */
-export type LogIndex = {
-    en: Array<number>
-    cm: Array<number>
-    lc: Array<number>
-}

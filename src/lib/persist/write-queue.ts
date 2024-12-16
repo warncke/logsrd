@@ -1,4 +1,5 @@
 import { Writable, WriteQueueItem } from "../globals"
+import LogId from "../log-id"
 
 export default class WriteQueue {
     promise: Promise<void>
@@ -18,7 +19,9 @@ export default class WriteQueue {
         })
     }
 
-    push(item: WriteQueueItem): void {
+    enqueue(logId: LogId, entry: Writable): WriteQueueItem {
+        const item = { logId, entry }
         this.queue.push(item)
+        return item
     }
 }

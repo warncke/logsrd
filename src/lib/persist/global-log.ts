@@ -1,9 +1,9 @@
 import GlobalLogEntry from "../entry/global-log-entry"
-import { LogIndex, ReadQueueItem, WriteQueueItem } from "../globals"
 import LogEntry from "../log-entry"
 import LogId from "../log-id"
 import GlobalLogReader from "./global-log-reader"
 import GlobalLogWriter from "./global-log-writer"
+import LogIndex from "./log-index"
 import PersistLog from "./persist-log"
 import ReadQueue from "./read-queue"
 import WriteQueue from "./write-queue"
@@ -19,8 +19,7 @@ export default class GlobalLog extends PersistLog {
         }
         // since we wait on a common promise, errors for individual
         // writes will be set on item if they occur
-        const item: WriteQueueItem = { logId, entry }
-        this.writeQueue.push(item)
+        const item = this.writeQueue.enqueue(logId, entry)
         // capture promise for current write queue because we do not
         // know when it will be moved to in progress
         const promise = this.writeQueue.promise

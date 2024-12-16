@@ -1,12 +1,10 @@
 import fs, { FileHandle } from "node:fs/promises"
 
-import CommandLogEntry from "../entry/command-log-entry"
-import CreateLogCommand from "../entry/command/create-log-command"
-import SetConfigCommand from "../entry/command/set-config-command"
 import GlobalLogCheckpoint from "../entry/global-log-checkpoint"
 import GlobalLogEntry from "../entry/global-log-entry"
 import { GLOBAL_LOG_CHECKPOINT_INTERVAL, ReadQueueItem } from "../globals"
 import GlobalLog from "./global-log"
+import LogIndex from "./log-index"
 import ReadQueue from "./read-queue"
 
 export default class GlobalLogReader {
@@ -121,29 +119,12 @@ export default class GlobalLogReader {
         }
         // create/get log index for this logId
         if (!log.index.has(entry.logId.base64())) {
-            log.index.set(entry.logId.base64(), {
-                en: [],
-                cm: [],
-                lc: [],
-            })
+            log.index.set(entry.logId.base64(), new LogIndex())
         }
         const logIndex = log.index.get(entry.logId.base64())!
-        // log config is written in either CreateLog or SetConfig command
-        if (entry.entry instanceof CreateLogCommand || entry.entry instanceof SetConfigCommand) {
-            // store as last config if it is more recent
-            if (logIndex.lc.length === 0 || logIndex.lc[0] < entryOffset) {
-                logIndex.lc[0] = entryOffset
-                logIndex.lc[1] = entry.byteLength()
-            }
-            // also add to command entries index because we need all commands + all entries to get accurate total length
-            logIndex.cm.push(entryOffset, entry.byteLength())
-        } else if (entry.entry instanceof CommandLogEntry) {
-            // add to command entries index
-            logIndex.cm.push(entryOffset, entry.byteLength())
-        } else {
-            // add to entires index
-            logIndex.en.push(entryOffset, entry.byteLength())
-        }
+        // ofset and length are of global entry but we pass in the log entry because it needs
+        // to be type checked to determine exactly what needs to be indexed
+        logIndex.addEntry(entry.entry, entryOffset, entry.byteLength())
     }
 
     static processReadQueue(log: GlobalLog): void {

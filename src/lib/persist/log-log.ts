@@ -2,12 +2,13 @@ import fs from "node:fs/promises"
 
 import { PersistLogArgs } from "../globals"
 import LogId from "../log-id"
+import LogIndex from "./log-index"
 import PersistLog from "./persist-log"
 
 export default class LogLog extends PersistLog {
     // index of offset, length of log entries. does not necessarily start with
     // zero because logs can be partially read from end.
-    index: Array<number> = []
+    index: Array<LogIndex> = []
     logId: LogId
     maxReadFHs: number = 4
 

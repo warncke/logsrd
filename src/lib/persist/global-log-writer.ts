@@ -1,12 +1,10 @@
 import fs from "node:fs/promises"
 
-import CommandLogEntry from "../entry/command-log-entry"
-import CreateLogCommand from "../entry/command/create-log-command"
-import SetConfigCommand from "../entry/command/set-config-command"
 import GlobalLogCheckpoint from "../entry/global-log-checkpoint"
 import GlobalLogEntry from "../entry/global-log-entry"
-import { GLOBAL_LOG_CHECKPOINT_INTERVAL, LogIndex } from "../globals"
+import { GLOBAL_LOG_CHECKPOINT_INTERVAL } from "../globals"
 import GlobalLog from "./global-log"
+import LogIndex from "./log-index"
 import WriteQueue from "./write-queue"
 
 export default class GlobalLogWriter {
@@ -43,34 +41,22 @@ export default class GlobalLogWriter {
                     : log.byteLength
             // add all items from queue to list of u8s to write
             for (const item of log.writeInProgress.queue) {
-                // create/get log index for this logId
-                if (!index.has(item.logId.base64())) {
-                    index.set(item.logId.base64(), {
-                        en: [],
-                        cm: [],
-                        lc: [],
-                    })
-                }
-                const logIndex = index.get(item.logId.base64())!
-                // offset of entry includes GLOBAL_LOG_ENTRY_PREFIX
-                const entryOffset = log.byteLength + writeBytes
-                // create log and set config both store the current log config we only need most recent
-                if (item.entry instanceof CreateLogCommand || item.entry instanceof SetConfigCommand) {
-                    // within a set of combined writes the last config will always be the most recent
-                    logIndex.lc[0] = entryOffset
-                    logIndex.lc[1] = item.entry.byteLength()
-                    // also add to command entries
-                    logIndex.cm.push(entryOffset, item.entry.byteLength())
-                } else if (item.entry instanceof CommandLogEntry) {
-                    logIndex.cm.push(entryOffset, item.entry.byteLength())
-                } else {
-                    logIndex.en.push(entryOffset, item.entry.byteLength())
-                }
                 // create global log entry
                 const globalLogEntry = new GlobalLogEntry({
                     logId: item.logId,
                     entry: item.entry,
                 })
+                // create/get log index for this logId
+                if (!index.has(item.logId.base64())) {
+                    index.set(item.logId.base64(), new LogIndex())
+                }
+                const logIndex = index.get(item.logId.base64())!
+                // offset of entry from length of file + bytes written in current write
+                const entryOffset = log.byteLength + writeBytes
+                // and entry to local index which will be merged to global index after write completes
+                // ofset and length are of global entry but we pass in the log entry because it needs
+                // to be type checked to determine exactly what needs to be indexed
+                logIndex.addEntry(item.entry, entryOffset, globalLogEntry.byteLength())
                 // bytes since last checkpoint including this entry
                 const bytesSinceCheckpoint = checkpointOffset + writeBytes + globalLogEntry.byteLength()
                 // if this entry would cross or end at checkpoint boundardy then add checkpoint
@@ -126,17 +112,7 @@ export default class GlobalLogWriter {
 
             for (const [logId, logIndex] of index) {
                 if (log.index.has(logId)) {
-                    const globalLogIndex = log.index.get(logId)!
-                    globalLogIndex.en.push(...logIndex.en)
-                    globalLogIndex.cm.push(...logIndex.cm)
-                    // if a log config was written and the global index is empty or the global config is older then update
-                    if (
-                        logIndex.lc.length > 0 &&
-                        (globalLogIndex.lc.length === 0 || globalLogIndex.lc[0] < logIndex.lc[0])
-                    ) {
-                        globalLogIndex.lc[0] = logIndex.lc[0]
-                        globalLogIndex.lc[1] = logIndex.lc[1]
-                    }
+                    log.index.get(logId)!.appendIndex(logIndex)
                 } else {
                     log.index.set(logId, logIndex)
                 }

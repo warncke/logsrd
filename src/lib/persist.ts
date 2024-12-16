@@ -179,8 +179,8 @@ export default class Persist {
         // order of persistence is hot > cold > log
         // try to get from hot log
         let logIndex = this.hotLog.index.get(logId.base64())
-        if (logIndex && logIndex.lc.length > 0) {
-            const entry = await this.hotLog.getEntry(logId, logIndex.lc[0], logIndex.lc[1])
+        if (logIndex && logIndex.hasConfig()) {
+            const entry = await this.hotLog.getEntry(logId, ...logIndex.lastConfig())
             if (!(entry instanceof CreateLogCommand || entry instanceof SetConfigCommand)) {
                 throw new Error("invalid entry type for config")
             }
@@ -188,8 +188,8 @@ export default class Persist {
         }
         // try to get from cold log
         logIndex = this.coldLog.index.get(logId.base64())
-        if (logIndex && logIndex.lc.length > 0) {
-            const entry = await this.coldLog.getEntry(logId, logIndex.lc[0], logIndex.lc[1])
+        if (logIndex && logIndex.hasConfig()) {
+            const entry = await this.coldLog.getEntry(logId, ...logIndex.lastConfig())
             if (!(entry instanceof CreateLogCommand || entry instanceof SetConfigCommand)) {
                 throw new Error("invalid entry type for config")
             }
@@ -204,13 +204,13 @@ export default class Persist {
         // try to get from hot log
         let entry = null
         let logIndex = this.hotLog.index.get(logId.base64())
-        if (logIndex && logIndex.en.length > 0) {
-            entry = await this.hotLog.getEntry(logId, logIndex.en.at(-2)!, logIndex.en.at(-1)!)
+        if (logIndex && logIndex.hasEntries()) {
+            entry = await this.hotLog.getEntry(logId, ...logIndex.lastEntry())
         }
         // try to get from cold log
         logIndex = this.coldLog.index.get(logId.base64())
-        if (logIndex && logIndex.lc.length > 0) {
-            entry = await this.coldLog.getEntry(logId, logIndex.en.at(-2)!, logIndex.en.at(-1)!)
+        if (logIndex && logIndex.hasEntries()) {
+            entry = await this.coldLog.getEntry(logId, ...logIndex.lastEntry())
         }
         // TODO: get from log log
         // some shitty validation
