@@ -1,9 +1,11 @@
 import fs from "node:fs/promises"
 import path from "path"
 
+import BinaryLogEntry from "./entry/binary-log-entry"
 import JSONCommandType from "./entry/command/command-type/json-command-type"
 import CreateLogCommand from "./entry/command/create-log-command"
 import SetConfigCommand from "./entry/command/set-config-command"
+import JSONLogEntry from "./entry/json-log-entry"
 import LogConfig from "./log-config"
 import LogEntry from "./log-entry"
 import LogId from "./log-id"
@@ -161,11 +163,12 @@ export default class Persist {
         await Promise.all([this.hotLog.init(), this.coldLog.init()])
     }
 
-    async appendLog(logId: LogId, entry: LogEntry): Promise<void> {}
-
-    async createLog(logId: LogId, entry: CreateLogCommand): Promise<boolean> {
+    async appendLog(logId: LogId, entry: LogEntry): Promise<void> {
         await this.hotLog.append(logId, entry)
-        return true
+    }
+
+    async createLog(logId: LogId, entry: CreateLogCommand): Promise<void> {
+        await this.hotLog.append(logId, entry)
     }
 
     async deleteLog(logId: LogId): Promise<boolean> {
@@ -177,17 +180,44 @@ export default class Persist {
         // try to get from hot log
         let logIndex = this.hotLog.index.get(logId.base64())
         if (logIndex && logIndex.lc.length > 0) {
-            const logEntry = await this.hotLog.getEntry(logId, logIndex.lc[0], logIndex.lc[1])
-            return logEntry instanceof CreateLogCommand || logEntry instanceof SetConfigCommand ? logEntry : null
+            const entry = await this.hotLog.getEntry(logId, logIndex.lc[0], logIndex.lc[1])
+            if (!(entry instanceof CreateLogCommand || entry instanceof SetConfigCommand)) {
+                throw new Error("invalid entry type for config")
+            }
+            return entry
         }
         // try to get from cold log
         logIndex = this.coldLog.index.get(logId.base64())
         if (logIndex && logIndex.lc.length > 0) {
-            const logEntry = await this.coldLog.getEntry(logId, logIndex.lc[0], logIndex.lc[1])
-            return logEntry instanceof CreateLogCommand || logEntry instanceof SetConfigCommand ? logEntry : null
+            const entry = await this.coldLog.getEntry(logId, logIndex.lc[0], logIndex.lc[1])
+            if (!(entry instanceof CreateLogCommand || entry instanceof SetConfigCommand)) {
+                throw new Error("invalid entry type for config")
+            }
+            return entry
         }
         // TODO: get from log log
         return null
+    }
+
+    async getHead(logId: LogId): Promise<JSONLogEntry | BinaryLogEntry | null> {
+        // order of persistence is hot > cold > log
+        // try to get from hot log
+        let entry = null
+        let logIndex = this.hotLog.index.get(logId.base64())
+        if (logIndex && logIndex.en.length > 0) {
+            entry = await this.hotLog.getEntry(logId, logIndex.en.at(-2)!, logIndex.en.at(-1)!)
+        }
+        // try to get from cold log
+        logIndex = this.coldLog.index.get(logId.base64())
+        if (logIndex && logIndex.lc.length > 0) {
+            entry = await this.coldLog.getEntry(logId, logIndex.en.at(-2)!, logIndex.en.at(-1)!)
+        }
+        // TODO: get from log log
+        // some shitty validation
+        if (entry !== null && !(entry instanceof JSONLogEntry || entry instanceof BinaryLogEntry)) {
+            throw new Error("invalid entry type for config")
+        }
+        return entry
     }
 
     // async openLog({ logId }: { logId: LogId }): Promise<PersistLog|null> {

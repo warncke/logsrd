@@ -14,6 +14,7 @@ import LogId from "./log-id"
  * Provides methods to get byte length, byte arrays and CRC32 checksum.
  */
 export interface Writable {
+    cksumNum: number
     byteLength: () => number
     u8s: () => Uint8Array[]
     cksum: () => Uint8Array

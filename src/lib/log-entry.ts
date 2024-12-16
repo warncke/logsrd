@@ -1,4 +1,6 @@
 export default class LogEntry {
+    cksumNum: number = 0
+
     constructor() {}
 
     u8s(): Uint8Array[] {

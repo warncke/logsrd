@@ -28,6 +28,7 @@ export default class LogConfig implements ILogConfig {
     master: string
     replicas: string[]
     type: LogType
+    // #jsonStr: string | null = null
 
     constructor({
         logId,
@@ -49,4 +50,11 @@ export default class LogConfig implements ILogConfig {
         this.master = master
         this.replicas = replicas ? replicas : []
     }
+
+    // toJSON(): string {
+    //     if (this.#jsonStr === null) {
+    //         this.#jsonStr = JSON.stringify(this)
+    //     }
+    //     return this.#jsonStr
+    // }
 }

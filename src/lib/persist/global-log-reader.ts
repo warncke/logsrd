@@ -116,7 +116,6 @@ export default class GlobalLogReader {
     }
 
     static addEntryToLog(log: GlobalLog, entry: GlobalLogEntry, entryOffset: number): void {
-        console.log(entry)
         if (!entry.verify()) {
             // TODO: error handling
             console.error("cksum verification failed", entry)
@@ -178,6 +177,7 @@ export default class GlobalLogReader {
             else if (log.busyReadFhs.length < log.maxReadFHs) {
                 // open file handles asynchronously and have them add themselves to free list when open
                 for (let i = 0; i < log.maxReadFHs - log.busyReadFhs.length; i++) {
+                    console.log("OPEN FH", log.busyReadFhs.length)
                     fs.open(log.logFile, "r").then((fh) => {
                         log.freeReadFhs.push(fh)
                     })

@@ -19,7 +19,10 @@ export default class BinaryLogEntry extends LogEntry {
     }
 
     cksum(): Uint8Array {
-        return new Uint8Array(new Uint32Array([crc32(this.u8, crc32(TYPE_BYTE))]).buffer)
+        if (this.cksumNum === 0) {
+            this.cksumNum = crc32(this.u8, crc32(TYPE_BYTE))
+        }
+        return new Uint8Array(new Uint32Array([this.cksumNum]).buffer)
     }
 
     u8s(): Uint8Array[] {
