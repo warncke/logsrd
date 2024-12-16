@@ -9,7 +9,7 @@ import ReadQueue from "./read-queue"
 import WriteQueue from "./write-queue"
 
 export default class GlobalLog extends PersistLog {
-    maxReadFHs: number = 8
+    maxReadFHs: number = 16
     // map of logId.base64() to LogIndex
     index: Map<string, LogIndex> = new Map()
 

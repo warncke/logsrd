@@ -1,17 +1,22 @@
-import { FileHandle } from "node:fs/promises"
+import fs, { FileHandle } from "node:fs/promises"
 
 import { PersistLogArgs } from "../globals"
 import LogConfig from "../log-config"
 import ReadQueue from "./read-queue"
 import WriteQueue from "./write-queue"
 
+// keep track of globally open read file handles
+const openReadFHs = 0
+
 export default class PersistLog {
     config: LogConfig
     // write file handle
     fh: FileHandle | null = null
     // read file handles
-    busyReadFhs: Array<FileHandle> = []
     freeReadFhs: Array<FileHandle> = []
+    // should be overridden
+    maxReadFHs: number = 1
+    openReadFhs: number = 0
     // file name of log
     logFile: string
     // length of file. for global log files, where the entire file is read and
@@ -42,6 +47,41 @@ export default class PersistLog {
         this.logFile = logFile
         this.readQueue = new ReadQueue()
         this.writeQueue = new WriteQueue()
+    }
+
+    openFH(): FileHandle | null {
+        if (this.freeReadFhs.length > 0) {
+            return this.freeReadFhs.pop()!
+        }
+        // TODO: add global limit
+        if (this.openReadFhs < this.maxReadFHs) {
+            // increment open here because it needs to be synchronous
+            this.openReadFhs += 1
+            fs.open(this.logFile, "r")
+                .then((fh) => {
+                    this.freeReadFhs.push(fh)
+                })
+                .catch((err) => {
+                    this.openReadFhs -= 1
+                    console.error(err)
+                })
+        }
+        return null
+    }
+
+    closeFH(fh: FileHandle): void {
+        fh.close()
+            .then(() => {
+                this.openReadFhs -= 1
+            })
+            .catch((err) => {
+                console.error(err)
+                this.openReadFhs -= 1
+            })
+    }
+
+    doneFH(fh: FileHandle): void {
+        this.freeReadFhs.push(fh)
     }
 
     unblockRead(): void {

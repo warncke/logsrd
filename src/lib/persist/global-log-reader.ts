@@ -1,4 +1,3 @@
-import { read } from "node:fs"
 import fs, { FileHandle } from "node:fs/promises"
 
 import CommandLogEntry from "../entry/command-log-entry"
@@ -167,37 +166,21 @@ export default class GlobalLogReader {
 
     static _processReadQueue(log: GlobalLog) {
         while (log.readInProgress!.queue.length > 0) {
-            let fh: FileHandle | null = null
-            // if there is a free read fh use it
-            if (log.freeReadFhs.length > 0) {
-                fh = log.freeReadFhs.pop()!
-                log.busyReadFhs.push(fh!)
+            let fh = log.openFH()
+            if (fh === null) {
+                break
             }
-            // if we can open more file handles then open one
-            else if (log.busyReadFhs.length < log.maxReadFHs) {
-                // open file handles asynchronously and have them add themselves to free list when open
-                for (let i = 0; i < log.maxReadFHs - log.busyReadFhs.length; i++) {
-                    console.log("OPEN FH", log.busyReadFhs.length)
-                    fs.open(log.logFile, "r").then((fh) => {
-                        log.freeReadFhs.push(fh)
-                    })
-                }
-            }
-            // if we got a file handle then remove item from queue and process it
-            if (fh !== null) {
-                const item = log.readInProgress!.queue.shift()!
-                GlobalLogReader._processReadQueueItem(log, item, fh).catch((err) => {
+            const item = log.readInProgress!.queue.shift()!
+            GlobalLogReader._processReadQueueItem(item, fh)
+                .then(() => {
+                    if (fh !== null) log.doneFH(fh)
+                })
+                .catch((err) => {
                     console.error(err)
                     item.reject(err)
                     // if there was an error just close the file handle for now
-                    if (fh !== null) fh.close()
+                    if (fh !== null) log.closeFH(fh)
                 })
-            }
-            // otherwise schedule processReadQueue to run again
-            else {
-                setTimeout(GlobalLogReader._processReadQueue, 0, log)
-                break
-            }
         }
         // if all reads complete then clear readInProgress
         if (log.readInProgress!.queue.length === 0) {
@@ -207,16 +190,18 @@ export default class GlobalLogReader {
                 setTimeout(GlobalLogReader.processReadQueue, 0, log)
             }
         }
+        // otherwise schedule processReadQueue to run again
+        else {
+            setTimeout(GlobalLogReader._processReadQueue, 0, log)
+        }
     }
 
-    static async _processReadQueueItem(log: GlobalLog, item: ReadQueueItem, fh: FileHandle) {
+    static async _processReadQueueItem(item: ReadQueueItem, fh: FileHandle) {
         if (item.reads.length === 0) {
-            item.reject(new Error("no reads"))
-            return
+            throw new Error("no reads")
         }
         if (item.reads.length % 2 !== 0) {
-            item.reject(new Error("odd number of reads"))
-            return
+            throw new Error("odd number of reads")
         }
         const u8s: Uint8Array[] = []
         // reads is array of offsets and lengths
@@ -233,18 +218,12 @@ export default class GlobalLogReader {
             })
 
             if (bytesRead !== length) {
-                item.reject(new Error(`read error offset=${offset} length=${length} bytesRead=${bytesRead}`))
-                return
+                throw new Error(`read error offset=${offset} length=${length} bytesRead=${bytesRead}`)
             }
 
             u8s.push(buffer)
         }
         // resolve read queue item with the buffers read
         item.resolve(u8s)
-        // replace busyReadFhs array with current fh filtered out
-        // !!! never hold a reference to busyReadFhs
-        log.busyReadFhs = log.busyReadFhs.filter((fh) => fh !== fh)
-        // add fh back to free list
-        log.freeReadFhs.push(fh)
     }
 }
