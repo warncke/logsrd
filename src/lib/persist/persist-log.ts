@@ -11,7 +11,7 @@ const openReadFHs = 0
 export default class PersistLog {
     config: LogConfig
     // write file handle
-    fh: FileHandle | null = null
+    writeFH: FileHandle | null = null
     // read file handles
     freeReadFhs: Array<FileHandle> = []
     // should be overridden
@@ -49,7 +49,7 @@ export default class PersistLog {
         this.writeQueue = new WriteQueue()
     }
 
-    openFH(): FileHandle | null {
+    getReadFH(): FileHandle | null {
         if (this.freeReadFhs.length > 0) {
             return this.freeReadFhs.pop()!
         }
@@ -69,7 +69,7 @@ export default class PersistLog {
         return null
     }
 
-    closeFH(fh: FileHandle): void {
+    closeReadFH(fh: FileHandle): void {
         fh.close()
             .then(() => {
                 this.openReadFhs -= 1
@@ -80,8 +80,36 @@ export default class PersistLog {
             })
     }
 
-    doneFH(fh: FileHandle): void {
+    doneReadFH(fh: FileHandle): void {
         this.freeReadFhs.push(fh)
+    }
+
+    async getWriteFH(): Promise<FileHandle> {
+        if (this.writeFH === null) {
+            this.writeFH = await fs.open(this.logFile, "a")
+        }
+        return this.writeFH
+    }
+
+    async closeWriteFH(): Promise<void> {
+        if (this.writeFH !== null) {
+            await this.writeFH.close()
+            this.writeFH = null
+        }
+    }
+
+    async blockWrite(promise: Promise<void>): Promise<void> {
+        // multiple callers may be waiting on writeBlocked - what happens???
+        while (this.writeBlocked !== null) {
+            await this.writeBlocked
+        }
+        this.writeBlocked = promise
+            .catch((err) => {
+                console.error(err)
+            })
+            .then(() => {
+                this.writeBlocked = null
+            })
     }
 
     unblockRead(): void {
@@ -92,5 +120,43 @@ export default class PersistLog {
     unblockWrite(): void {
         this.writeBlocked = null
         // TODO: add method to process write queue
+    }
+
+    /**
+     * this is a fundamentally dangerous operation. it is needed to recover from failed log compactions
+     * but it could easily lead to data loss in the case of bugs. for this reason it copies the truncated
+     * data to a backup file before truncating. TODO: add chained CRC to log entries that also allows
+     * verification that all entries exist in the correct order?
+     *
+     * this should only be called when writes are already blocked.
+     */
+    async truncate(byteLength: number): Promise<void> {
+        if (byteLength < 1) {
+            throw new Error(`trucate called with ${byteLength}`)
+        }
+        await this.closeWriteFH()
+        // open file handles to copy data to be truncated
+        const srcFH = await fs.open(this.logFile, "r")
+        const dstFH = await fs.open(`${this.logFile}.truncated.${Date.now()}`, "w")
+        // start reading after truncation location
+        let offset = byteLength
+        // read in 16kb blocks
+        const readBytes = 1024 * 16
+        const u8 = new Uint8Array(readBytes)
+        // copy data to be truncated
+        while (true) {
+            const { bytesRead } = await srcFH.read(u8, { position: offset, length: readBytes })
+            await dstFH.write(new Uint8Array(u8.buffer, u8.byteOffset, bytesRead))
+            offset += bytesRead
+            // end of file
+            if (bytesRead < readBytes) {
+                break
+            }
+        }
+        // close copy file handles
+        await srcFH.close()
+        await dstFH.close()
+        // truncate file
+        await fs.truncate(this.logFile, byteLength)
     }
 }

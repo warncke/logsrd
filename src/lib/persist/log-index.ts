@@ -28,6 +28,42 @@ export default class LogIndex {
         }
     }
 
+    entries() {
+        return this.en
+    }
+
+    commands() {
+        return this.cm
+    }
+
+    allEntries() {
+        // create merged array of all entries sorted ascending by offset
+        const allEntries = []
+
+        let cmIdx = 0
+        let enIdx = 0
+
+        while (cmIdx < this.cm.length || enIdx < this.en.length) {
+            if (cmIdx < this.cm.length && enIdx < this.en.length) {
+                if (this.cm[cmIdx] < this.en[enIdx]) {
+                    allEntries.push(this.cm[cmIdx], this.cm[cmIdx + 1])
+                    cmIdx += 2
+                } else {
+                    allEntries.push(this.en[enIdx], this.en[enIdx + 1])
+                    enIdx += 2
+                }
+            } else if (cmIdx < this.cm.length) {
+                allEntries.push(this.cm[cmIdx], this.cm[cmIdx + 1])
+                cmIdx += 2
+            } else if (enIdx < this.en.length) {
+                allEntries.push(this.en[enIdx], this.en[enIdx + 1])
+                enIdx += 2
+            }
+        }
+
+        return allEntries
+    }
+
     appendIndex(index: LogIndex) {
         // if appended index has more recent config then update
         if (index.lcOff !== null && (this.lcOff === null || index.lcOff > this.lcOff)) {
@@ -36,6 +72,30 @@ export default class LogIndex {
         }
         this.en.push(...index.en)
         this.cm.push(...index.cm)
+    }
+
+    /**
+     *
+     * @param prefixByteLength depends on what type of log entry is stored in
+     */
+    commandByteLength(prefixByteLength: number): number {
+        let byteLength = 0
+        for (let i = 0; i < this.cm.length; i += 2) {
+            byteLength += this.cm[i + 1] - prefixByteLength
+        }
+        return byteLength
+    }
+
+    entryByteLength(prefixByteLength: number): number {
+        let byteLength = 0
+        for (let i = 0; i < this.en.length; i += 2) {
+            byteLength += this.en[i + 1] - prefixByteLength
+        }
+        return byteLength
+    }
+
+    totalByteLength(prefixByteLength: number): number {
+        return this.commandByteLength(prefixByteLength) + this.entryByteLength(prefixByteLength)
     }
 
     hasConfig(): boolean {

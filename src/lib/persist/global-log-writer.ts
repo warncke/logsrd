@@ -24,9 +24,6 @@ export default class GlobalLogWriter {
         log.writeQueue = new WriteQueue()
 
         try {
-            if (log.fh === null) {
-                log.fh = await fs.open(log.logFile, "a")
-            }
             // create index of offset and length of every write which will
             // be added to the hot/cold log index if all writes are successful
             const index: Map<string, LogIndex> = new Map()
@@ -101,14 +98,8 @@ export default class GlobalLogWriter {
                     writeBytes += globalLogEntry.byteLength()
                 }
             }
-            // write buffers
-            const ret = await log.fh.writev(u8s)
-            // sync data only as we do not care about metadata
-            await log.fh.datasync()
 
-            if (ret.bytesWritten !== writeBytes) {
-                throw new Error(`Failed to write all bytes. Expected: ${writeBytes} Actual: ${ret.bytesWritten}`)
-            }
+            await GlobalLogWriter._writeU8sUnsafe(log, u8s, writeBytes)
 
             for (const [logId, logIndex] of index) {
                 if (log.index.has(logId)) {
@@ -137,6 +128,40 @@ export default class GlobalLogWriter {
         // if new write queue has any items then process it on next tick
         if (log.writeQueue !== null && log.writeQueue.queue.length > 0) {
             setTimeout(GlobalLogWriter.processWriteQueue, 0, log)
+        }
+    }
+
+    /**
+     * Write array of u8s to log writeFH.
+     */
+    static async writeU8sBlocking(log: GlobalLog, u8s: Uint8Array[]): Promise<void> {
+        const promise = new Promise<void>((resolve, reject) => {
+            GlobalLogWriter._writeU8sBlocking(log, u8s).then(resolve).catch(reject)
+        })
+        await log.blockWrite(promise)
+        await promise
+    }
+
+    static async _writeU8sBlocking(log: GlobalLog, u8s: Uint8Array[]): Promise<void> {}
+
+    /**
+     * Do write actual write without any checks for blocking
+     */
+    static async _writeU8sUnsafe(log: GlobalLog, u8s: Uint8Array[], writeBytes: number): Promise<void> {
+        // write buffers
+        const ret = await (await log.getWriteFH()).writev(u8s)
+        if (ret.bytesWritten === writeBytes) {
+            // sync data only as we do not care about metadata
+            await (await log.getWriteFH()).datasync()
+            // update internal file length
+            log.byteLength += ret.bytesWritten
+        } else {
+            try {
+                await log.truncate(log.byteLength)
+            } catch (err) {
+                log.byteLength += ret.bytesWritten
+                throw new Error(`Failed to write all bytes. Expected: ${writeBytes} Actual: ${ret.bytesWritten}`)
+            }
         }
     }
 }

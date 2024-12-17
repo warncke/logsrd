@@ -1,6 +1,8 @@
 import BinaryLogEntry from "./entry/binary-log-entry"
 import CommandLogEntry from "./entry/command-log-entry"
+import BeginCompactColdCommand from "./entry/command/begin-compact-cold-command"
 import CreateLogCommand from "./entry/command/create-log-command"
+import FinishCompactColdCommand from "./entry/command/finish-compact-cold-command"
 import SetConfigCommand from "./entry/command/set-config-command"
 import GlobalLogCheckpoint from "./entry/global-log-checkpoint"
 import GlobalLogEntry from "./entry/global-log-entry"
@@ -31,11 +33,17 @@ export const enum CommandName {
     FINISH_COMPACT_COLD,
 }
 
-export type COMMAND_CLASSES = typeof CreateLogCommand | typeof SetConfigCommand
+export type COMMAND_CLASSES =
+    | typeof CreateLogCommand
+    | typeof SetConfigCommand
+    | typeof BeginCompactColdCommand
+    | typeof FinishCompactColdCommand
 
 export const COMMAND_CLASS: { [index: number]: COMMAND_CLASSES } = {
     [CommandName.CREATE_LOG]: CreateLogCommand,
     [CommandName.SET_CONFIG]: SetConfigCommand,
+    [CommandName.BEGIN_COMPACT_COLD]: BeginCompactColdCommand,
+    [CommandName.FINISH_COMPACT_COLD]: FinishCompactColdCommand,
 }
 
 /**
@@ -146,4 +154,20 @@ export const GLOBAL_LOG_CHECKPOINT_INTERVAL = 128 * 1024
 /**
  * Write a checkpoint entry to the log at the beginning of every 128KB block
  */
-export const LOG_LOG_CHECKPOINT_INTERVAL = 128 * 1024
+export const LOG_LOG_CHECKPOINT_INTERVAL = 128 * 1024 // every entry is prefixed with 1 byte entry type + 16 byte logId + 2 byte length + 4 byte crc
+
+/**
+ * Global logs have a prefix of 23 bytes
+ * - 1 byte entry type
+ * - 16 byte logId
+ * - 2 byte length
+ * - 4 byte crc
+ */
+export const GLOBAL_LOG_PREFIX_BYTE_LENGTH = 23
+
+/**
+ * Log logs have a prefix of 6 bytes
+ * - 2 byte length
+ * - 4 byte crc
+ */
+export const LOG_LOG_PREFIX_BYTE_LENGTH = 6

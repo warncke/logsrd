@@ -1,4 +1,4 @@
-import GlobalLogEntry from "../entry/global-log-entry"
+import GlobalLogEntryFactory from "../global-log-entry-factory"
 import LogEntry from "../log-entry"
 import LogId from "../log-id"
 import GlobalLogReader from "./global-log-reader"
@@ -48,7 +48,7 @@ export default class GlobalLog extends PersistLog {
             GlobalLogReader.processReadQueue(this)
         }
         const [entryU8] = await item.promise
-        const globalLogEntry = GlobalLogEntry.fromU8(entryU8)
+        const globalLogEntry = GlobalLogEntryFactory.fromU8(entryU8)
         if (globalLogEntry.logId.base64() !== logId.base64()) {
             throw new Error("logId mismatch")
         }

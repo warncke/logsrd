@@ -2,7 +2,10 @@ import fs, { FileHandle } from "node:fs/promises"
 
 import GlobalLogCheckpoint from "../entry/global-log-checkpoint"
 import GlobalLogEntry from "../entry/global-log-entry"
+import LogLogEntry from "../entry/log-log-entry"
+import GlobalLogEntryFactory from "../global-log-entry-factory"
 import { GLOBAL_LOG_CHECKPOINT_INTERVAL, ReadQueueItem } from "../globals"
+import LogId from "../log-id"
 import GlobalLog from "./global-log"
 import LogIndex from "./log-index"
 import ReadQueue from "./read-queue"
@@ -10,7 +13,7 @@ import ReadQueue from "./read-queue"
 export default class GlobalLogReader {
     static async initGlobal(log: GlobalLog): Promise<void> {
         // this should only be run at startup so these should always be null
-        if (log.fh !== null || log.readBlocked !== null || log.writeBlocked !== null) {
+        if (log.writeFH !== null || log.readBlocked !== null || log.writeBlocked !== null) {
             throw new Error("Error starting initGlobal")
         }
         // create promise to block reads/writes on log while this runs
@@ -70,21 +73,28 @@ export default class GlobalLogReader {
                         new Uint8Array(lastU8!.buffer, lastU8!.byteLength - lastEntryLength),
                         new Uint8Array(currU8.buffer, 0, lastEntryOffset),
                     ])
-                    const res = GlobalLogEntry.fromPartialU8(lastEntryU8)
+                    const res = GlobalLogEntryFactory.fromPartialU8(lastEntryU8)
                     if (res.err) {
                         throw res.err
                     } else if (res.needBytes) {
                         throw new Error("Error getting entry from checkpoint boundary")
                     }
-                    const entry = res.entry as GlobalLogEntry
+                    const entry = res.entry
                     const entryOffset = bytesRead - lastEntryOffset
-                    GlobalLogReader.addEntryToLog(log, entry, entryOffset)
-                    u8BytesRead += entry.byteLength()
+                    // handle command log entries
+                    if (entry instanceof LogLogEntry) {
+                        console.log(entry, entry.byteLength())
+                    }
+                    // otherwise this is log entry
+                    else {
+                        GlobalLogReader.addEntryToLog(log, entry as GlobalLogEntry, entryOffset)
+                    }
+                    u8BytesRead += entry!.byteLength()
                 }
             }
 
             while (u8BytesRead < ret.bytesRead) {
-                const res = GlobalLogEntry.fromPartialU8(
+                const res = GlobalLogEntryFactory.fromPartialU8(
                     new Uint8Array(currU8.buffer, currU8.byteOffset + u8BytesRead, currU8.byteLength - u8BytesRead),
                 )
                 if (res.err) {
@@ -94,10 +104,17 @@ export default class GlobalLogReader {
                     ;[lastU8] = [currU8]
                     break
                 }
-                const entry = res.entry as GlobalLogEntry
+                const entry = res.entry
                 const entryOffset = bytesRead + u8BytesRead
-                GlobalLogReader.addEntryToLog(log, entry, entryOffset)
-                u8BytesRead += entry.byteLength()
+                // handle command log entries
+                if (entry instanceof LogLogEntry) {
+                    console.log(entry, entry.byteLength())
+                }
+                // otherwise this is log entry
+                else {
+                    GlobalLogReader.addEntryToLog(log, entry as GlobalLogEntry, entryOffset)
+                }
+                u8BytesRead += entry!.byteLength()
             }
 
             bytesRead += ret.bytesRead
@@ -146,21 +163,22 @@ export default class GlobalLogReader {
     }
 
     static _processReadQueue(log: GlobalLog) {
+        log.readInProgress!.queue = GlobalLogReader.combineReads(log.readInProgress!.queue)
         while (log.readInProgress!.queue.length > 0) {
-            let fh = log.openFH()
+            let fh = log.getReadFH()
             if (fh === null) {
                 break
             }
             const item = log.readInProgress!.queue.shift()!
             GlobalLogReader._processReadQueueItem(item, fh)
                 .then(() => {
-                    if (fh !== null) log.doneFH(fh)
+                    if (fh !== null) log.doneReadFH(fh)
                 })
                 .catch((err) => {
                     console.error(err)
                     item.reject(err)
                     // if there was an error just close the file handle for now
-                    if (fh !== null) log.closeFH(fh)
+                    if (fh !== null) log.closeReadFH(fh)
                 })
         }
         // if all reads complete then clear readInProgress
@@ -175,6 +193,95 @@ export default class GlobalLogReader {
         else {
             setTimeout(GlobalLogReader._processReadQueue, 0, log)
         }
+    }
+
+    /**
+     * TODO: this improves throughput ~4X when all reads can be combined but needs to be
+     * further profiled and tuned for real query patterns.
+     *
+     * If no reads are combined the additional cost is a matter of the time and memory
+     * it takes to build the index and the GC churn it causes.
+     *
+     * This could be improved when stats counters are added for logs and then only
+     * build indexes for logs over a certain RPS threshold.
+     */
+    static combineReads(items: ReadQueueItem[]): ReadQueueItem[] {
+        // nothing to be combined
+        if (items.length < 2) {
+            return items
+        }
+
+        const itemsByLogId: Map<string, Map<string, ReadQueueItem[]>> = new Map()
+
+        for (const item of items) {
+            const logIdBase64 = item.logId.base64()
+            if (!itemsByLogId.has(logIdBase64)) {
+                itemsByLogId.set(logIdBase64, new Map())
+            }
+            const itemsByRead = itemsByLogId.get(logIdBase64)!
+            const readKey = item.reads.join("-")
+            if (!itemsByRead.has(readKey)) {
+                itemsByRead.set(readKey, [])
+            }
+            const indexedItems = itemsByRead.get(readKey)!
+            indexedItems.push(item)
+        }
+
+        const combinedReads = []
+
+        for (const item of items) {
+            const itemsByRead = itemsByLogId.get(item.logId.base64())!
+            const readKey = item.reads.join("-")
+            const indexedItems = itemsByRead.get(readKey)
+            // if this has been deleted then reads have already been combined
+            if (indexedItems === undefined) {
+                continue
+            }
+            if (indexedItems.length > 1) {
+                combinedReads.push(GlobalLogReader.combineReadsForItems(indexedItems))
+                itemsByRead.delete(readKey)
+            } else {
+                combinedReads.push(item)
+            }
+        }
+
+        return combinedReads
+    }
+
+    static combineReadsForItems(items: ReadQueueItem[]): ReadQueueItem {
+        // each reader is waiting on a promise that can only be resolved/rejected
+        // with the functions stored on the item so we create a new item with a
+        // new promise/resolve/reject and then when that is completed we call
+        // all of the original resolve/rejects
+        let resolve: ReadQueueItem["resolve"]
+        let reject: ReadQueueItem["reject"]
+
+        const item: any = {
+            logId: items[0].logId,
+            reads: items[0].reads,
+        }
+
+        const promise = new Promise<Uint8Array[]>((res, rej) => {
+            item.resolve = res
+            item.reject = rej
+            setTimeout(() => {
+                item.promise
+                    .then((u8s: Uint8Array[]) => {
+                        for (const item of items) {
+                            item.resolve(u8s)
+                        }
+                    })
+                    .catch((err: any) => {
+                        for (const item of items) {
+                            item.reject(err)
+                        }
+                    })
+            }, 0)
+        })
+
+        item.promise = promise
+
+        return item
     }
 
     static async _processReadQueueItem(item: ReadQueueItem, fh: FileHandle) {

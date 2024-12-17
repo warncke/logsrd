@@ -281,9 +281,9 @@ async function run(): Promise<void> {
 
     logsrd.listen(port, (token) => {
         if (token) {
-            console.log("Listening to port " + port)
+            console.error("Listening to port " + port)
         } else {
-            console.log("Failed to listen to port " + port)
+            console.error("Failed to listen to port " + port)
         }
     })
 }

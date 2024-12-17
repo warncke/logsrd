@@ -29,4 +29,8 @@ export default class CommandLogEntry extends LogEntry {
     u8s(): Uint8Array[] {
         return [TYPE_BYTE, this.commandNameU8, this.commandValueU8]
     }
+
+    value() {
+        throw new Error("Not implemented")
+    }
 }
