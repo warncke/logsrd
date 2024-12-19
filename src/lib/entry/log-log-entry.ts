@@ -1,33 +1,48 @@
-import { EntryType, LOG_LOG_PREFIX_BYTE_LENGTH, Writable } from "../globals"
+import { EntryType, LOG_LOG_PREFIX_BYTE_LENGTH } from "../globals"
 import LogEntry from "../log-entry"
 
 const TYPE_BYTE = new Uint8Array([EntryType.LOG_LOG])
 
 export default class LogLogEntry extends LogEntry {
-    entry: Writable
-    crc32: Uint8Array | null
+    entry: LogEntry
+    entryNum: number
+    crc: number | null
+    #prefixU8: Uint8Array | null = null
 
-    constructor({ entry, crc32 }: { entry: Writable; crc32?: Uint8Array }) {
+    constructor({ entry, entryNum, crc }: { entry: LogEntry; entryNum: number; crc?: number }) {
         super()
         this.entry = entry
-        this.crc32 = crc32 ? crc32 : null
+        this.entryNum = entryNum
+        this.crc = crc === undefined ? null : crc
     }
 
     byteLength(): number {
-        // entry length is: 1 byte entry type + 2 byte length + entry bytes... + 4 byte checksum
         return LOG_LOG_PREFIX_BYTE_LENGTH + this.entry.byteLength()
     }
 
+    cksum(): number {
+        if (this.cksumNum === 0) {
+            this.cksumNum = this.entry.cksum(this.entryNum)
+        }
+        return this.cksumNum
+    }
+
+    prefixU8(): Uint8Array {
+        if (this.#prefixU8 !== null) {
+            return this.#prefixU8
+        }
+        this.#prefixU8 = new Uint8Array(LOG_LOG_PREFIX_BYTE_LENGTH)
+        this.#prefixU8.set(new Uint8Array(new Uint32Array([this.entryNum]).buffer))
+        this.#prefixU8.set(new Uint8Array(new Uint16Array([this.entry.byteLength()]).buffer), 4)
+        this.#prefixU8.set(new Uint8Array(new Uint32Array([this.cksum()]).buffer), 6)
+        return this.#prefixU8
+    }
+
     u8s(): Uint8Array[] {
-        return [
-            TYPE_BYTE,
-            new Uint8Array(new Uint16Array([this.entry.byteLength()]).buffer),
-            this.entry.cksum(),
-            ...this.entry.u8s(),
-        ]
+        return [this.prefixU8(), ...this.entry.u8s()]
     }
 
     verify(): boolean {
-        return this.crc32 === null ? false : new Uint32Array(this.crc32)[0] === new Uint32Array(this.entry.cksum())[0]
+        return this.crc === null ? false : this.crc === this.cksum()
     }
 }

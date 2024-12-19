@@ -14,13 +14,13 @@ import WriteIOOperation from "../io/write-io-operation"
 import PersistedLog from "./persisted-log"
 
 type LogIop = {
-    logOffset: number
-    globalLogOffset: number
+    entryNum: number
+    offset: number
     iOp: WriteIOOperation
 }
 type LogIopInfo = {
     logId: LogId
-    logOffset: number
+    maxEntryNum: number
     iOps: LogIop[]
 }
 
@@ -92,7 +92,8 @@ export default class GlobalLog extends PersistedLog {
                 let logIopInfo: LogIopInfo | null = null
                 // this is a command entry for the global log
                 if (iOp.logId === null) {
-                    logEntry = new LogLogEntry({ entry: iOp.entry })
+                    // global logs are ephemeral so they do not have a real entryNum
+                    logEntry = new LogLogEntry({ entry: iOp.entry, entryNum: 0 })
                 }
                 // this is a log entry for a log log
                 else {
@@ -101,24 +102,23 @@ export default class GlobalLog extends PersistedLog {
                     if (!logIops.has(logIdBase64)) {
                         logIops.set(logIdBase64, {
                             logId: iOp.logId,
-                            logOffset: this.persist.getLog(iOp.logId).logOffset(),
+                            maxEntryNum: this.persist.getLog(iOp.logId).maxEntryNum(),
                             iOps: [],
                         })
                     }
                     logIopInfo = logIops.get(logIdBase64)!
+                    logIopInfo.maxEntryNum += 1
                     logEntry = new GlobalLogEntry({
                         logId: iOp.logId,
-                        logOffset: logIopInfo.logOffset,
+                        entryNum: logIopInfo.maxEntryNum,
                         entry: iOp.entry,
                     })
                     // and entry to local index which will be merged to global index after write completes
                     logIopInfo.iOps.push({
-                        logOffset: logIopInfo.logOffset,
-                        globalLogOffset: entryOffset,
+                        entryNum: logIopInfo.maxEntryNum,
+                        offset: entryOffset,
                         iOp: iOp,
                     })
-                    // new offset for loglog is entry length - GLOBAL_LOG_PREFIX_BYTE_LENGTH
-                    logIopInfo.logOffset = logIopInfo.logOffset + iOp.entry.byteLength() - GLOBAL_LOG_PREFIX_BYTE_LENGTH
                 }
                 // bytes since last checkpoint including this entry
                 const bytesSinceCheckpoint = checkpointOffset + writeBytes + logEntry.byteLength()
@@ -186,7 +186,7 @@ export default class GlobalLog extends PersistedLog {
                 for (const iOp of iOpInfo.iOps) {
                     iOp.iOp.bytesWritten = iOp.iOp.entry.byteLength()
                     // global log writes always go to hot log
-                    log.addNewHotLogEntry(iOp.iOp.entry, iOp.logOffset, iOp.globalLogOffset, iOp.iOp.entry.byteLength())
+                    log.addNewHotLogEntry(iOp.iOp.entry, iOp.entryNum, iOp.offset, iOp.iOp.entry.byteLength())
                     // resolves promise for iOp
                     iOp.iOp.complete()
                 }
@@ -230,13 +230,11 @@ export default class GlobalLog extends PersistedLog {
                 if (bytesRead > GLOBAL_LOG_CHECKPOINT_INTERVAL) {
                     const checkpoint = GlobalLogCheckpoint.fromU8(currU8) as GlobalLogCheckpoint
                     u8BytesRead += checkpoint.byteLength()
-                    const lastEntryLength = checkpoint.lastEntryLengthValue()
-                    const lastEntryOffset = checkpoint.lastEntryOffsetValue()
                     // if the last entry did not end on checkpoint boundary then need to combine from last and curr
-                    if (lastEntryOffset !== lastEntryLength) {
+                    if (checkpoint.lastEntryOffset !== checkpoint.lastEntryLength) {
                         const lastEntryU8 = Buffer.concat([
-                            new Uint8Array(lastU8!.buffer, lastU8!.byteLength - lastEntryLength),
-                            new Uint8Array(currU8.buffer, 0, lastEntryOffset),
+                            new Uint8Array(lastU8!.buffer, lastU8!.byteLength - checkpoint.lastEntryLength),
+                            new Uint8Array(currU8.buffer, 0, checkpoint.lastEntryOffset),
                         ])
                         const res = GlobalLogEntryFactory.fromPartialU8(lastEntryU8)
                         if (res.err) {
@@ -245,7 +243,7 @@ export default class GlobalLog extends PersistedLog {
                             throw new Error("Error getting entry from checkpoint boundary")
                         }
                         const entry = res.entry
-                        const entryOffset = bytesRead - lastEntryOffset
+                        const entryOffset = bytesRead - checkpoint.lastEntryOffset
                         // handle command log entries
                         if (entry instanceof LogLogEntry) {
                             console.log(entry, entry.byteLength())
@@ -304,11 +302,11 @@ export default class GlobalLog extends PersistedLog {
         }
         const persistLog = this.persist.getLog(entry.logId)
         if (this.isNewHotLog) {
-            persistLog.addNewHotLogEntry(entry, entry.logOffset, globalOffset, entry.byteLength())
+            persistLog.addNewHotLogEntry(entry, entry.entryNum, globalOffset, entry.byteLength())
         } else if (this.isColdLog) {
-            persistLog.addColdLogEntry(entry, entry.logOffset, globalOffset, entry.byteLength())
+            persistLog.addColdLogEntry(entry, entry.entryNum, globalOffset, entry.byteLength())
         } else if (this.isOldHotLog) {
-            persistLog.addOldHotLogEntry(entry, entry.logOffset, globalOffset, entry.byteLength())
+            persistLog.addOldHotLogEntry(entry, entry.entryNum, globalOffset, entry.byteLength())
         } else {
             throw new Error("unknown log type")
         }

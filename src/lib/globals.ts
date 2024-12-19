@@ -19,17 +19,6 @@ export const MAX_ENTRY_SIZE = 2 ** 15
 export const MAX_LOG_SIZE = 2 ** 24
 
 /**
- * Interface for objects that can be written to a log.
- * Provides methods to get byte length, byte arrays and CRC32 checksum.
- */
-export interface Writable {
-    cksumNum: number
-    byteLength: () => number
-    u8s: () => Uint8Array[]
-    cksum: () => Uint8Array
-}
-
-/**
  * Every CommandLogEntry begins with a single byte interpreted as a little endian unsigned integer
  * that indicates the command name.
  */
@@ -149,15 +138,17 @@ export const LOG_LOG_CHECKPOINT_INTERVAL = 128 * 1024
  * Global logs have a prefix of 27 bytes
  * - 1 byte entry type
  * - 16 byte logId
- * - 4 byte log offset
+ * - 4 byte entryNum
  * - 2 byte length
  * - 4 byte crc
  */
 export const GLOBAL_LOG_PREFIX_BYTE_LENGTH = 27
 
 /**
- * Log logs have a prefix of 6 bytes
+ * Log logs have a prefix of 11 bytes
+ * - 1 byte entry type
+ * - 4 byte entryNum
  * - 2 byte length
  * - 4 byte crc
  */
-export const LOG_LOG_PREFIX_BYTE_LENGTH = 6
+export const LOG_LOG_PREFIX_BYTE_LENGTH = 11

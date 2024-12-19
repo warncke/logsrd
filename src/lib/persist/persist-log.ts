@@ -87,39 +87,39 @@ export default class PersistLog {
         throw new Error("Not implemented")
     }
 
-    logOffset(): number {
+    maxEntryNum(): number {
         if (this.newHotLogIndex !== null && this.newHotLogIndex.hasAnyEntries()) {
-            return this.newHotLogIndex.logOffset()
+            return this.newHotLogIndex.maxEntryNum()
         } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasAnyEntries()) {
-            return this.oldHotLogIndex.logOffset()
+            return this.oldHotLogIndex.maxEntryNum()
         } else if (this.coldLogIndex !== null && this.coldLogIndex.hasAnyEntries()) {
-            return this.coldLogIndex.logOffset()
+            return this.coldLogIndex.maxEntryNum()
         } else if (this.logLogIndex !== null && this.logLogIndex.hasAnyEntries()) {
-            return this.logLogIndex.logOffset()
+            return this.logLogIndex.maxEntryNum()
         } else {
             return 0
         }
     }
 
-    addNewHotLogEntry(entry: LogEntry, logOffset: number, globalOffset: number, length: number) {
+    addNewHotLogEntry(entry: LogEntry, entryNum: number, globalOffset: number, length: number) {
         if (this.newHotLogIndex === null) {
             this.newHotLogIndex = new GlobalLogIndex()
         }
-        this.newHotLogIndex.addEntry(entry, logOffset, globalOffset, length)
+        this.newHotLogIndex.addEntry(entry, entryNum, globalOffset, length)
     }
 
-    addOldHotLogEntry(entry: LogEntry, logOffset: number, globalOffset: number, length: number) {
+    addOldHotLogEntry(entry: LogEntry, entryNum: number, globalOffset: number, length: number) {
         if (this.oldHotLogIndex === null) {
             this.oldHotLogIndex = new GlobalLogIndex()
         }
-        this.oldHotLogIndex.addEntry(entry, logOffset, globalOffset, length)
+        this.oldHotLogIndex.addEntry(entry, entryNum, globalOffset, length)
     }
 
-    addColdLogEntry(entry: LogEntry, logOffset: number, globalOffset: number, length: number) {
+    addColdLogEntry(entry: LogEntry, entryNum: number, globalOffset: number, length: number) {
         if (this.coldLogIndex === null) {
             this.coldLogIndex = new GlobalLogIndex()
         }
-        this.coldLogIndex.addEntry(entry, logOffset, globalOffset, length)
+        this.coldLogIndex.addEntry(entry, entryNum, globalOffset, length)
     }
 
     filename() {

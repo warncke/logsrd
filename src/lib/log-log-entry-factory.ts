@@ -8,7 +8,7 @@ export default class LogLogEntryFactory {
         if (entryType !== EntryType.LOG_LOG) {
             throw new Error(`Invalid entryType: ${entryType}`)
         }
-        return new LogLogEntry(LogLogEntryFactory.commandLogArgsFromU8(u8))
+        return new LogLogEntry(LogLogEntryFactory.logLogArgsFromU8(u8))
     }
 
     static fromPartialU8(u8: Uint8Array): {
@@ -29,7 +29,7 @@ export default class LogLogEntryFactory {
                 return { needBytes: totalLength - u8.length }
             }
             try {
-                return { entry: new LogLogEntry(LogLogEntryFactory.commandLogArgsFromU8(u8)) }
+                return { entry: new LogLogEntry(LogLogEntryFactory.logLogArgsFromU8(u8)) }
             } catch (err: any) {
                 return { err }
             }
@@ -39,19 +39,21 @@ export default class LogLogEntryFactory {
     }
 
     static entryLengthFromU8(u8: Uint8Array): number {
-        return new Uint16Array(u8.buffer.slice(u8.byteOffset + 1, u8.byteOffset + 3))[0]
+        return new Uint16Array(u8.buffer.slice(u8.byteOffset + 5, u8.byteOffset + 7))[0]
     }
 
-    static commandLogArgsFromU8(u8: Uint8Array): {
+    static logLogArgsFromU8(u8: Uint8Array): {
         entry: LogEntry
-        crc32: Uint8Array
+        entryNum: number
+        crc: number
     } {
         const entryLength = LogLogEntryFactory.entryLengthFromU8(u8)
-        const crc32 = new Uint8Array(u8.buffer.slice(u8.byteOffset + 3, u8.byteOffset + 7))
+        const entryNum = new Uint32Array(u8.buffer.slice(u8.byteOffset + 1, u8.byteOffset + 5))[0]
+        const crc = new Uint32Array(u8.buffer.slice(u8.byteOffset + 7, u8.byteOffset + 11))[0]
         const entry = LogLogEntryFactory.fromU8(
             new Uint8Array(u8.buffer, u8.byteOffset + LOG_LOG_PREFIX_BYTE_LENGTH, entryLength),
         )
 
-        return { entry, crc32 }
+        return { entry, entryNum, crc: crc }
     }
 }

@@ -11,8 +11,8 @@ export default class LogEntry {
         return 0
     }
 
-    cksum(): Uint8Array {
-        return new Uint8Array(new Uint32Array([0]).buffer)
+    cksum(entryNum: number): number {
+        return 0
     }
 
     // entry types with fixed length should override this

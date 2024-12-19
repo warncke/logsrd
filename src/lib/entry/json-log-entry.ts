@@ -25,11 +25,11 @@ export default class JSONLogEntry extends LogEntry {
         return 1 + this.jsonU8().byteLength
     }
 
-    cksum(): Uint8Array {
+    cksum(entryNum: number): number {
         if (this.cksumNum === 0) {
-            this.cksumNum = crc32(this.jsonU8(), crc32(TYPE_BYTE))
+            this.cksumNum = crc32(this.jsonU8(), crc32(TYPE_BYTE, entryNum))
         }
-        return new Uint8Array(new Uint32Array([this.cksumNum]).buffer)
+        return this.cksumNum
     }
 
     jsonU8(): Uint8Array {
