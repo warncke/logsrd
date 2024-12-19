@@ -5,12 +5,24 @@ import LogId from "../log-id"
 const TYPE_BYTE = new Uint8Array([EntryType.GLOBAL_LOG])
 
 export default class GlobalLogEntry extends LogEntry {
+    logOffset: number
     logId: LogId
     entry: Writable
     crc32: Uint8Array | null
 
-    constructor({ logId, entry, crc32 }: { logId: LogId; entry: Writable; crc32?: Uint8Array }) {
+    constructor({
+        logOffset,
+        logId,
+        entry,
+        crc32,
+    }: {
+        logOffset: number
+        logId: LogId
+        entry: Writable
+        crc32?: Uint8Array
+    }) {
         super()
+        this.logOffset = logOffset
         this.logId = logId
         this.entry = entry
         this.crc32 = crc32 ? crc32 : null
@@ -24,6 +36,7 @@ export default class GlobalLogEntry extends LogEntry {
         return [
             TYPE_BYTE,
             this.logId.logId,
+            new Uint8Array(new Uint32Array([this.logOffset]).buffer),
             new Uint8Array(new Uint16Array([this.entry.byteLength()]).buffer),
             this.entry.cksum(),
             ...this.entry.u8s(),

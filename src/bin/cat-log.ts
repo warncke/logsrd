@@ -1,12 +1,21 @@
 import LogConfig from "../lib/log-config"
 import LogId from "../lib/log-id"
-import GlobalLogReader from "../lib/persist/global-log-reader"
-import HotLog from "../lib/persist/hot-log"
+import Persist from "../lib/persist"
+import HotLog from "../lib/persist/persisted-log/hot-log"
+
+const dataDir = process.env.DATA_DIR || "./data"
 
 run().catch(console.error)
 
 async function run() {
     const logFile = process.argv[2]
+
+    const persist = new Persist({
+        dataDir,
+        pageSize: 4096,
+        diskCompactThreshold: 1024 ** 2,
+        memCompactThreshold: 1024 ** 2 * 100,
+    })
 
     const log = new HotLog({
         config: new LogConfig({
@@ -15,6 +24,8 @@ async function run() {
             type: "global",
         }),
         logFile,
+        persist,
     })
-    await GlobalLogReader.initGlobal(log)
+
+    await log.init()
 }

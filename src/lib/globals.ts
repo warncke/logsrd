@@ -10,6 +10,13 @@ import JSONLogEntry from "./entry/json-log-entry"
 import LogLogCheckpoint from "./entry/log-log-checkpoint"
 import LogLogEntry from "./entry/log-log-entry"
 import LogId from "./log-id"
+import Persist from "./persist"
+
+/**
+ * Maximum entry size of 32KB and maximum log size of 16MB are temporary limitations
+ */
+export const MAX_ENTRY_SIZE = 2 ** 15
+export const MAX_LOG_SIZE = 2 ** 24
 
 /**
  * Interface for objects that can be written to a log.
@@ -95,31 +102,9 @@ export const LOG_TYPE_MAP: { [index: string]: LogType } = {
     global: LogType.GLOBAL,
 }
 
-/**
- * A WriteQueueItem is an entry to be written to a log that is submitted
- * to a queue. Once the queue is processed and its promise is resolved
- * error will be populated if the entry could not be written.
- */
-export type WriteQueueItem = {
-    logId: LogId
-    entry: Writable
-    error?: any
-}
-
-/**
- * A ReadQueueItem is a list of offset, length positions to be read from
- * a log. The reads array is a list of potentially multiple offsets and
- * lengths. The promise is created when inserting the item into the queue
- * and will be resolved/rejected when the read is complete. The resolve
- * and reject functions are stored on the item so they can be called by
- * the reader to complete the operation.
- */
-export type ReadQueueItem = {
-    logId: LogId
-    reads: number[]
-    promise: Promise<Uint8Array[]>
-    resolve: (value: Uint8Array[] | PromiseLike<Uint8Array[]>) => void
-    reject: (reason?: any) => void
+export enum IOOperationType {
+    READ,
+    WRITE,
 }
 
 /**
@@ -144,6 +129,10 @@ export interface ILogConfig {
 export type PersistLogArgs = {
     config: ILogConfig
     logFile: string
+    persist: Persist
+    isColdLog?: boolean
+    isNewHotLog?: boolean
+    isOldHotLog?: boolean
 }
 
 /**
@@ -154,16 +143,17 @@ export const GLOBAL_LOG_CHECKPOINT_INTERVAL = 128 * 1024
 /**
  * Write a checkpoint entry to the log at the beginning of every 128KB block
  */
-export const LOG_LOG_CHECKPOINT_INTERVAL = 128 * 1024 // every entry is prefixed with 1 byte entry type + 16 byte logId + 2 byte length + 4 byte crc
+export const LOG_LOG_CHECKPOINT_INTERVAL = 128 * 1024
 
 /**
- * Global logs have a prefix of 23 bytes
+ * Global logs have a prefix of 27 bytes
  * - 1 byte entry type
  * - 16 byte logId
+ * - 4 byte log offset
  * - 2 byte length
  * - 4 byte crc
  */
-export const GLOBAL_LOG_PREFIX_BYTE_LENGTH = 23
+export const GLOBAL_LOG_PREFIX_BYTE_LENGTH = 27
 
 /**
  * Log logs have a prefix of 6 bytes

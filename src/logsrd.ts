@@ -1,6 +1,7 @@
 import uWS, { HttpResponse, RecognizedString } from "uWebSockets.js"
 
 import JSONLogEntry from "./lib/entry/json-log-entry"
+import { MAX_ENTRY_SIZE } from "./lib/globals"
 import LogId from "./lib/log-id"
 import Persist from "./lib/persist"
 import Server from "./lib/server"
@@ -19,7 +20,7 @@ const INVALID_LOG_ID_ERROR = "Invalid log id"
 const LOG_NOT_FOUND_ERROR = "Log not found"
 const LOG_OR_HEAD_NOT_FOUND_ERROR = "Log not found or log has no entries"
 const SERVER_ERROR = "Server error"
-const MAX_POST_SIZE_ERROR = `Max post size ${Server.MAX_ENTRY_SIZE} bytes exceeded`
+const MAX_POST_SIZE_ERROR = `Max post size ${MAX_ENTRY_SIZE} bytes exceeded`
 const NO_ENTRIES_INFO = "No entries"
 
 async function run(): Promise<void> {
@@ -63,7 +64,7 @@ async function run(): Promise<void> {
             async (data: Uint8Array) => {
                 if (ABORTED) return
 
-                if (data.length > Server.MAX_ENTRY_SIZE) {
+                if (data.length > MAX_ENTRY_SIZE) {
                     res.cork(() => {
                         res.writeStatus("400")
                         res.end(MAX_POST_SIZE_ERROR)
@@ -134,7 +135,7 @@ async function run(): Promise<void> {
             async (data: Uint8Array) => {
                 if (ABORTED) return
 
-                if (data.length > Server.MAX_ENTRY_SIZE) {
+                if (data.length > MAX_ENTRY_SIZE) {
                     res.cork(() => {
                         res.writeStatus("400")
                         res.end(MAX_POST_SIZE_ERROR)
@@ -309,7 +310,7 @@ function readPost(res: HttpResponse, cb: (data: Uint8Array) => void, err: () => 
         } else {
             if (buffer) {
                 buffer = Buffer.concat([buffer, chunk])
-                if (buffer.length > Server.MAX_ENTRY_SIZE) {
+                if (buffer.length > MAX_ENTRY_SIZE) {
                     // hard stop connection - no response
                     res.close()
                 }

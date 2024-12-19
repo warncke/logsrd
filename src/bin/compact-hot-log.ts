@@ -18,5 +18,5 @@ async function run(): Promise<void> {
     await HotLogCompactor.compactToCold(persist)
 
     if (persist.coldLog.writeFH !== null) await persist.coldLog.writeFH.close()
-    if (persist.hotLog.writeFH !== null) await persist.hotLog.writeFH.close()
+    if (persist.newHotLog.writeFH !== null) await persist.newHotLog.writeFH.close()
 }

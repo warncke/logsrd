@@ -56,21 +56,23 @@ export default class GlobalLogEntryFactory {
     }
 
     static entryLengthFromU8(u8: Uint8Array): number {
-        return new Uint16Array(u8.buffer.slice(u8.byteOffset + 17, u8.byteOffset + 19))[0]
+        return new Uint16Array(u8.buffer.slice(u8.byteOffset + 21, u8.byteOffset + 23))[0]
     }
 
     static commandLogArgsFromU8(u8: Uint8Array): {
         logId: LogId
+        logOffset: number
         entry: LogEntry
         crc32: Uint8Array
     } {
         const entryLength = GlobalLogEntryFactory.entryLengthFromU8(u8)
         const logId = new LogId(new Uint8Array(u8.buffer, u8.byteOffset + 1, 16))
-        const crc32 = new Uint8Array(u8.buffer.slice(u8.byteOffset + 19, u8.byteOffset + 23))
+        const logOffset = new Uint32Array(u8.buffer.slice(u8.byteOffset + 17, u8.byteOffset + 21))[0]
+        const crc32 = new Uint8Array(u8.buffer.slice(u8.byteOffset + 23, u8.byteOffset + 27))
         const entry = LogEntryFactory.fromU8(
             new Uint8Array(u8.buffer, u8.byteOffset + GLOBAL_LOG_PREFIX_BYTE_LENGTH, entryLength),
         )
 
-        return { logId, entry, crc32 }
+        return { logId, logOffset, entry, crc32 }
     }
 }

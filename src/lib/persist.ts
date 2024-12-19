@@ -1,18 +1,10 @@
-import fs from "node:fs/promises"
 import path from "path"
 
-import BinaryLogEntry from "./entry/binary-log-entry"
-import JSONCommandType from "./entry/command/command-type/json-command-type"
-import CreateLogCommand from "./entry/command/create-log-command"
-import SetConfigCommand from "./entry/command/set-config-command"
-import JSONLogEntry from "./entry/json-log-entry"
 import LogConfig from "./log-config"
-import LogEntry from "./log-entry"
 import LogId from "./log-id"
-import ColdLog from "./persist/cold-log"
-import HotLog from "./persist/hot-log"
-import LogLog from "./persist/log-log"
 import PersistLog from "./persist/persist-log"
+import ColdLog from "./persist/persisted-log/cold-log"
+import HotLog from "./persist/persisted-log/hot-log"
 
 /**
  * Persistence
@@ -122,6 +114,8 @@ export type PersistConfig = {
     memCompactThreshold: number
     coldLogFileName?: string
     hotLogFileName?: string
+    blobDir?: string
+    logDir?: string
 }
 
 const DEFAULT_COLD_LOG_FILE_NAME = "global-cold.log"
@@ -130,97 +124,56 @@ const DEFAULT_HOT_LOG_FILE_NAME = "global-hot.log"
 export default class Persist {
     config: PersistConfig
     coldLog: ColdLog
-    hotLog: HotLog
-    openLogs: Map<string, LogLog>
+    oldHotLog: HotLog
+    newHotLog: HotLog
+    logs: Map<string, PersistLog>
 
     constructor(config: PersistConfig) {
         config.coldLogFileName = config.coldLogFileName || DEFAULT_COLD_LOG_FILE_NAME
         config.hotLogFileName = config.hotLogFileName || DEFAULT_HOT_LOG_FILE_NAME
+        config.blobDir = config.blobDir || path.join(config.dataDir, "blobs")
+        config.logDir = config.logDir || path.join(config.dataDir, "logs")
         this.config = config
+        // TODO: this is hacky but i want to be able to control log reading based on log
+        // config and i dont want to make these params optional and then have to add checks
+        // everywhere to statisfy tsc so i am doing it like this for now
+        const globalLogConfig = new LogConfig({
+            logId: new LogId(new Uint8Array(16)),
+            master: "",
+            type: "global",
+        })
         this.coldLog = new ColdLog({
-            // TODO: this is hacky but i want to be able to control log reading based on log
-            // config and i dont want to make these params optional and then have to add checks
-            // everywhere to statisfy tsc so i am doing it like this for now
-            config: new LogConfig({
-                logId: new LogId(new Uint8Array(16)),
-                master: "",
-                type: "global",
-            }),
+            config: globalLogConfig,
             logFile: path.join(this.config.dataDir, config.coldLogFileName),
+            persist: this,
+            isColdLog: true,
         })
-        this.hotLog = new HotLog({
-            config: new LogConfig({
-                logId: new LogId(new Uint8Array(16)),
-                master: "",
-                type: "global",
-            }),
-            logFile: path.join(this.config.dataDir, config.hotLogFileName),
+        this.oldHotLog = new HotLog({
+            config: globalLogConfig,
+            logFile: path.join(this.config.dataDir, `${config.hotLogFileName}.old`),
+            persist: this,
+            isOldHotLog: true,
         })
-        this.openLogs = new Map()
+        this.newHotLog = new HotLog({
+            config: globalLogConfig,
+            logFile: path.join(this.config.dataDir, `${config.hotLogFileName}.new`),
+            persist: this,
+            isNewHotLog: true,
+        })
+        this.logs = new Map()
+    }
+
+    getLog(logId: LogId): PersistLog {
+        if (!this.logs.has(logId.base64())) {
+            this.logs.set(logId.base64(), new PersistLog(this, logId))
+        }
+        return this.logs.get(logId.base64())!
     }
 
     async init(): Promise<void> {
-        await Promise.all([this.hotLog.init(), this.coldLog.init()])
+        // iniitalize logs in inverse order of how they are written to
+        await this.coldLog.init()
+        await this.oldHotLog.init()
+        await this.newHotLog.init()
     }
-
-    async appendLog(logId: LogId, entry: LogEntry): Promise<void> {
-        await this.hotLog.append(logId, entry)
-    }
-
-    async createLog(logId: LogId, entry: CreateLogCommand): Promise<void> {
-        await this.hotLog.append(logId, entry)
-    }
-
-    async deleteLog(logId: LogId): Promise<boolean> {
-        return false
-    }
-
-    async getConfig(logId: LogId): Promise<CreateLogCommand | SetConfigCommand | null> {
-        // order of persistence is hot > cold > log
-        // try to get from hot log
-        let logIndex = this.hotLog.index.get(logId.base64())
-        if (logIndex && logIndex.hasConfig()) {
-            const entry = await this.hotLog.getEntry(logId, ...logIndex.lastConfig())
-            if (!(entry instanceof CreateLogCommand || entry instanceof SetConfigCommand)) {
-                throw new Error("invalid entry type for config")
-            }
-            return entry
-        }
-        // try to get from cold log
-        logIndex = this.coldLog.index.get(logId.base64())
-        if (logIndex && logIndex.hasConfig()) {
-            const entry = await this.coldLog.getEntry(logId, ...logIndex.lastConfig())
-            if (!(entry instanceof CreateLogCommand || entry instanceof SetConfigCommand)) {
-                throw new Error("invalid entry type for config")
-            }
-            return entry
-        }
-        // TODO: get from log log
-        return null
-    }
-
-    async getHead(logId: LogId): Promise<JSONLogEntry | BinaryLogEntry | null> {
-        // order of persistence is hot > cold > log
-        // try to get from hot log
-        let entry = null
-        let logIndex = this.hotLog.index.get(logId.base64())
-        if (logIndex && logIndex.hasEntries()) {
-            entry = await this.hotLog.getEntry(logId, ...logIndex.lastEntry())
-        }
-        // try to get from cold log
-        logIndex = this.coldLog.index.get(logId.base64())
-        if (logIndex && logIndex.hasEntries()) {
-            entry = await this.coldLog.getEntry(logId, ...logIndex.lastEntry())
-        }
-        // TODO: get from log log
-        // some shitty validation
-        if (entry !== null && !(entry instanceof JSONLogEntry || entry instanceof BinaryLogEntry)) {
-            throw new Error("invalid entry type for config")
-        }
-        return entry
-    }
-
-    // async openLog({ logId }: { logId: LogId }): Promise<PersistLog|null> {
-
-    // }
 }

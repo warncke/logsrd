@@ -2,6 +2,7 @@ import crypto from "mz/crypto"
 
 class LogId {
     #base64: string | null = null
+    #logDirPrefix: string | null = null
     logId: Uint8Array
 
     constructor(logId: Uint8Array, base64?: string) {
@@ -28,6 +29,12 @@ class LogId {
 
     toJSON() {
         return this.base64()
+    }
+
+    logDirPrefix() {
+        return this.#logDirPrefix !== null
+            ? this.#logDirPrefix
+            : (this.#logDirPrefix = `${this.logId.at(0)!.toString(16).padStart(2, "0").toLowerCase()}/${this.logId.at(1)!.toString(16).padStart(2, "0").toLowerCase()}`)
     }
 
     static async newRandom(): Promise<LogId> {

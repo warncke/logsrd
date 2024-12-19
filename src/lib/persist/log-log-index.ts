@@ -3,9 +3,12 @@ import CreateLogCommand from "../entry/command/create-log-command"
 import SetConfigCommand from "../entry/command/set-config-command"
 import LogEntry from "../log-entry"
 
-export default class LogIndex {
+export default class LogLogIndex {
+    // log entry offset, length, ...
     en: number[] = []
+    // command log entry offset, length, ...
     cm: number[] = []
+    // offset and length of last config entry
     lcOff: number | null = null
     lcLen: number | null = null
 
@@ -64,7 +67,7 @@ export default class LogIndex {
         return allEntries
     }
 
-    appendIndex(index: LogIndex) {
+    appendIndex(index: LogLogIndex) {
         // if appended index has more recent config then update
         if (index.lcOff !== null && (this.lcOff === null || index.lcOff > this.lcOff)) {
             this.lcOff = index.lcOff
@@ -113,10 +116,34 @@ export default class LogIndex {
         return this.en.length >= 2
     }
 
+    hasAnyEntries(): boolean {
+        return this.en.length >= 2 || this.cm.length >= 2
+    }
+
     lastEntry(): [number, number] {
         if (this.en.length < 2) {
             throw new Error("no last entry")
         }
         return [this.en.at(-2)!, this.en.at(-1)!]
+    }
+
+    logOffset(): number {
+        if (this.en.length >= 2 && this.cm.length >= 2) {
+            const enLogOffset = this.en.at(-2)!
+            const enLogLength = this.en.at(-1)!
+            const cmLogOffset = this.cm.at(-2)!
+            const cmLogLength = this.cm.at(-1)!
+            return enLogOffset > cmLogOffset ? enLogOffset + enLogLength : cmLogOffset + cmLogLength
+        } else if (this.en.length >= 2) {
+            const enLogOffset = this.en.at(-2)!
+            const enLogLength = this.en.at(-1)!
+            return enLogOffset + enLogLength
+        } else if (this.cm.length >= 2) {
+            const cmLogOffset = this.cm.at(-2)!
+            const cmLogLength = this.cm.at(-1)!
+            return cmLogOffset + cmLogLength
+        } else {
+            return 0
+        }
     }
 }
