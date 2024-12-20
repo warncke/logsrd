@@ -1,7 +1,7 @@
 import { crc32 } from "@node-rs/crc32"
 
 import { EntryType } from "../globals"
-import LogEntry from "../log-entry"
+import LogEntry from "./log-entry"
 
 const TYPE_BYTE = new Uint8Array([EntryType.COMMAND])
 export default class CommandLogEntry extends LogEntry {

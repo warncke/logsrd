@@ -1,6 +1,6 @@
 import { IOOperationType } from "../globals"
 import IOOperation from "./io/io-operation"
-import ReadIOOperation from "./io/read-io-operation"
+import ReadIOOperation from "./io/read-range-io-operation"
 import WriteIOOperation from "./io/write-io-operation"
 
 export default class PersistLogStats {
@@ -17,19 +17,19 @@ export default class PersistLogStats {
 
     constructor() {}
 
-    addIOp(iOp: IOOperation) {
-        const opTime = iOp.endTime - iOp.startTime
-        if (iOp.op === IOOperationType.READ) {
+    addOp(op: IOOperation) {
+        const opTime = op.endTime - op.startTime
+        if (op.op in [IOOperationType.READ_HEAD, IOOperationType.READ_CONFIG, IOOperationType.READ_RANGE]) {
             this.ioReadTimeAvg = (this.ioReadTimeAvg * this.ioReads + opTime) / (this.ioReads + 1)
             this.ioReadTimeMax = Math.max(this.ioReadTimeMax, opTime)
-            this.ioReadLastTime = iOp.endTime
-            this.bytesRead += (iOp as ReadIOOperation).bytesRead
+            this.ioReadLastTime = op.endTime
+            this.bytesRead += (op as ReadIOOperation).bytesRead
             this.ioReads++
-        } else if (iOp.op === IOOperationType.WRITE) {
+        } else if (op.op === IOOperationType.WRITE) {
             this.ioWriteTimeAvg = (this.ioWriteTimeAvg * this.ioWrites + opTime) / (this.ioWrites + 1)
             this.ioWriteTimeMax = Math.max(this.ioWriteTimeMax, opTime)
-            this.ioWriteLastTime = iOp.endTime
-            this.bytesWritten += (iOp as WriteIOOperation).bytesWritten
+            this.ioWriteLastTime = op.endTime
+            this.bytesWritten += (op as WriteIOOperation).bytesWritten
             this.ioWrites++
         } else {
             throw new Error("unknown IO op")

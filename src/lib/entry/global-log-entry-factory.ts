@@ -1,9 +1,9 @@
-import GlobalLogEntry from "./entry/global-log-entry"
-import LogLogEntry from "./entry/log-log-entry"
-import { EntryType, GLOBAL_LOG_PREFIX_BYTE_LENGTH } from "./globals"
+import { EntryType, GLOBAL_LOG_PREFIX_BYTE_LENGTH } from "../globals"
+import LogId from "../log-id"
+import GlobalLogEntry from "./global-log-entry"
 import LogEntry from "./log-entry"
 import LogEntryFactory from "./log-entry-factory"
-import LogId from "./log-id"
+import LogLogEntry from "./log-log-entry"
 import LogLogEntryFactory from "./log-log-entry-factory"
 
 export default class GlobalLogEntryFactory {
@@ -15,7 +15,7 @@ export default class GlobalLogEntryFactory {
         if (entryType !== EntryType.GLOBAL_LOG) {
             throw new Error(`Invalid entryType: ${entryType}`)
         }
-        return new GlobalLogEntry(GlobalLogEntryFactory.commandLogArgsFromU8(u8))
+        return new GlobalLogEntry(GlobalLogEntryFactory.globalLogEntryArgsFromU8(u8))
     }
 
     /**
@@ -40,7 +40,7 @@ export default class GlobalLogEntryFactory {
                 return { needBytes: totalLength - u8.length }
             }
             try {
-                return { entry: new GlobalLogEntry(GlobalLogEntryFactory.commandLogArgsFromU8(u8)) }
+                return { entry: new GlobalLogEntry(GlobalLogEntryFactory.globalLogEntryArgsFromU8(u8)) }
             } catch (err: any) {
                 return { err }
             }
@@ -59,20 +59,20 @@ export default class GlobalLogEntryFactory {
         return new Uint16Array(u8.buffer.slice(u8.byteOffset + 21, u8.byteOffset + 23))[0]
     }
 
-    static commandLogArgsFromU8(u8: Uint8Array): {
+    static globalLogEntryArgsFromU8(u8: Uint8Array): {
         logId: LogId
         entryNum: number
+        crc: number
         entry: LogEntry
-        crc32: Uint8Array
     } {
         const entryLength = GlobalLogEntryFactory.entryLengthFromU8(u8)
         const logId = new LogId(new Uint8Array(u8.buffer, u8.byteOffset + 1, 16))
         const entryNum = new Uint32Array(u8.buffer.slice(u8.byteOffset + 17, u8.byteOffset + 21))[0]
-        const crc32 = new Uint8Array(u8.buffer.slice(u8.byteOffset + 23, u8.byteOffset + 27))
+        const crc = new Uint32Array(u8.buffer.slice(u8.byteOffset + 23, u8.byteOffset + 27))[0]
         const entry = LogEntryFactory.fromU8(
             new Uint8Array(u8.buffer, u8.byteOffset + GLOBAL_LOG_PREFIX_BYTE_LENGTH, entryLength),
         )
 
-        return { logId, entryNum, entry, crc32 }
+        return { logId, entryNum, crc, entry }
     }
 }

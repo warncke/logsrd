@@ -1,8 +1,14 @@
 import BinaryLogEntry from "./entry/binary-log-entry"
+import CreateLogCommand from "./entry/command/create-log-command"
+import SetConfigCommand from "./entry/command/set-config-command"
+import GlobalLogEntry from "./entry/global-log-entry"
 import JSONLogEntry from "./entry/json-log-entry"
+import LogEntry from "./entry/log-entry"
+import LogLogEntry from "./entry/log-log-entry"
 import LogConfig from "./log-config"
 import LogId from "./log-id"
 import Persist from "./persist"
+import GlobalLog from "./persist/persisted-log/global-log"
 
 export type ServerConfig = {
     host: string
@@ -17,12 +23,8 @@ export default class Server {
         this.persist = persist
     }
 
-    async appendLog(logId: LogId, data: Uint8Array): Promise<number | null> {
+    async appendLog(logId: LogId, data: Uint8Array): Promise<{ entryNum: number; crc: number }> {
         const config = await this.getConfig(logId)
-        if (config === null) {
-            return null
-        }
-
         // TODO: add support for command entries
         let entry
         if (config.type === "json") {
@@ -33,13 +35,16 @@ export default class Server {
             throw new Error(`unknown log type ${config.type}`)
         }
 
-        await this.persist.getLog(logId).append(entry)
+        entry = await this.persist.getLog(logId).append(entry)
         // cksum was not performed - unknown error
         if (entry.cksumNum === 0) {
             throw new Error("cksum error")
         }
 
-        return entry.cksumNum
+        return {
+            crc: entry.cksumNum,
+            entryNum: entry.entryNum,
+        }
     }
 
     async createLog(config: any): Promise<LogConfig> {
@@ -59,7 +64,7 @@ export default class Server {
         return config
     }
 
-    async getHead(logId: LogId): Promise<JSONLogEntry | BinaryLogEntry | null> {
+    async getHead(logId: LogId): Promise<GlobalLogEntry | LogLogEntry> {
         const entry = await this.persist.getLog(logId).getHead()
         // TODO
         return entry

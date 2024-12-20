@@ -2,13 +2,19 @@ import fs from "node:fs/promises"
 import path from "path"
 
 import BinaryLogEntry from "../entry/binary-log-entry"
+import JSONCommandType from "../entry/command/command-type/json-command-type"
 import CreateLogCommand from "../entry/command/create-log-command"
+import SetConfigCommand from "../entry/command/set-config-command"
+import GlobalLogEntry from "../entry/global-log-entry"
 import JSONLogEntry from "../entry/json-log-entry"
+import LogEntry from "../entry/log-entry"
+import LogLogEntry from "../entry/log-log-entry"
 import LogConfig from "../log-config"
-import LogEntry from "../log-entry"
 import LogId from "../log-id"
 import Persist from "../persist"
 import GlobalLogIndex from "./global-log-index"
+import ReadConfigIOOperation from "./io/read-config-io-operation"
+import ReadHeadIOOperation from "./io/read-head-io-operation"
 import WriteIOOperation from "./io/write-io-operation"
 import LogLogIndex from "./log-log-index"
 import PersistLogStats from "./persist-log-stats"
@@ -29,7 +35,17 @@ export default class PersistLog {
         this.logId = logId
     }
 
-    async append(entry: LogEntry) {}
+    async append(entry: LogEntry): Promise<GlobalLogEntry | LogLogEntry> {
+        let op = new WriteIOOperation(entry, this.logId)
+        this.persist.newHotLog.enqueueIOp(op)
+        this.stats.addOp(op)
+        op = await op.promise
+        if (op.entry instanceof GlobalLogEntry || op.entry instanceof LogLogEntry) {
+            return op.entry
+        } else {
+            throw new Error("Invalid entry type")
+        }
+    }
 
     async create(config: LogConfig) {
         if (this.creating) {
@@ -40,15 +56,17 @@ export default class PersistLog {
         }
         this.creating = true
         const entry = new CreateLogCommand({ value: config })
-        const iOp = new WriteIOOperation(entry, this.logId)
-        this.persist.newHotLog.enqueueIOp(iOp)
-        await iOp.promise.catch((err) => {
-            this.creating = false
+        const op = new WriteIOOperation(entry, this.logId)
+        this.persist.newHotLog.enqueueIOp(op)
+        try {
+            await op.promise
+        } catch (err) {
             throw err
-        })
-        this.stats.addIOp(iOp)
+        } finally {
+            this.creating = false
+        }
+        this.stats.addOp(op)
         this.config = config
-        this.creating = false
     }
 
     async exists(): Promise<boolean> {
@@ -71,33 +89,95 @@ export default class PersistLog {
     async getConfig(): Promise<LogConfig> {
         if (this.config !== null) {
             return this.config
-        } else {
-            throw new Error("Log does not exist")
         }
-        // else if (this.newHotLogIndex !== null && this.newHotLogIndex.hasConfig()) {
-        // } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
-        // } else if (this.coldLogIndex !== null && this.coldLogIndex.hasConfig()) {
-        // } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
-        // } else {
-        //     return null
-        // }
+        let op = new ReadConfigIOOperation(this.logId)
+        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasConfig()) {
+            this.persist.newHotLog.enqueueIOp(op)
+        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
+            this.persist.oldHotLog.enqueueIOp(op)
+        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasConfig()) {
+            this.persist.coldLog.enqueueIOp(op)
+        } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
+            throw new Error("Not implemented")
+        } else {
+            throw new Error("Not implemented")
+        }
+        op = await op.promise
+        this.stats.addOp(op)
+        if (op.entry === null) {
+            throw new Error("entry is null")
+        }
+        if (op.entry.entry instanceof JSONCommandType) {
+            this.config = new LogConfig(op.entry.entry.value())
+        } else {
+            throw new Error("Invalid entry type for config")
+        }
+        return this.config
     }
 
-    async getHead(): Promise<JSONLogEntry | BinaryLogEntry | null> {
-        throw new Error("Not implemented")
+    getLastGlobalConfig(): [number, number, number] {
+        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasConfig()) {
+            return this.newHotLogIndex.lastConfig()
+        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
+            return this.oldHotLogIndex.lastConfig()
+        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasConfig()) {
+            return this.coldLogIndex.lastConfig()
+        } else {
+            // when compacting need to make sure there are no outstanding read ops
+            throw new Error("No global config")
+        }
+    }
+
+    getLastGlobalEntry(): [number, number, number] {
+        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntries()) {
+            return this.newHotLogIndex.lastEntry()
+        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
+            return this.oldHotLogIndex.lastEntry()
+        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntries()) {
+            return this.coldLogIndex.lastEntry()
+        } else {
+            // when compacting need to make sure there are no outstanding read ops
+            throw new Error("No global entries")
+        }
+    }
+
+    async getHead(): Promise<GlobalLogEntry | LogLogEntry> {
+        let op = new ReadHeadIOOperation(this.logId)
+        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntries()) {
+            this.persist.newHotLog.enqueueIOp(op)
+        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
+            this.persist.oldHotLog.enqueueIOp(op)
+        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntries()) {
+            this.persist.coldLog.enqueueIOp(op)
+        } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
+            throw new Error("Not implemented")
+        } else {
+            throw new Error("Not implemented")
+        }
+        op = await op.promise
+        this.stats.addOp(op)
+        if (op.entry === null) {
+            throw new Error("entry is null")
+        }
+        if (op.entry instanceof GlobalLogEntry || op.entry instanceof LogLogEntry) {
+            return op.entry
+        } else {
+            throw new Error("Invalid entry type for config")
+        }
     }
 
     maxEntryNum(): number {
-        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasAnyEntries()) {
+        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntries()) {
             return this.newHotLogIndex.maxEntryNum()
-        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasAnyEntries()) {
+        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
             return this.oldHotLogIndex.maxEntryNum()
-        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasAnyEntries()) {
+        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntries()) {
             return this.coldLogIndex.maxEntryNum()
-        } else if (this.logLogIndex !== null && this.logLogIndex.hasAnyEntries()) {
+        } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
             return this.logLogIndex.maxEntryNum()
         } else {
-            return 0
+            // if there are no entries return -1 so this will be incremented to zero for the first entry
+            return -1
         }
     }
 

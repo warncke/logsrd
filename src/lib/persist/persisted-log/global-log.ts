@@ -1,27 +1,32 @@
 import fs, { FileHandle } from "node:fs/promises"
 
+import CreateLogCommand from "../../entry/command/create-log-command"
+import SetConfigCommand from "../../entry/command/set-config-command"
 import GlobalLogCheckpoint from "../../entry/global-log-checkpoint"
 import GlobalLogEntry from "../../entry/global-log-entry"
+import GlobalLogEntryFactory from "../../entry/global-log-entry-factory"
+import LogEntry from "../../entry/log-entry"
 import LogLogEntry from "../../entry/log-log-entry"
-import GlobalLogEntryFactory from "../../global-log-entry-factory"
-import { GLOBAL_LOG_CHECKPOINT_INTERVAL, GLOBAL_LOG_PREFIX_BYTE_LENGTH, PersistLogArgs } from "../../globals"
-import LogEntry from "../../log-entry"
+import { GLOBAL_LOG_CHECKPOINT_INTERVAL, IOOperationType, PersistLogArgs, ReadIOOperation } from "../../globals"
 import LogId from "../../log-id"
-import GlobalLogIOQueue from "../global-log-io-queue"
+import GlobalLogIOQueue from "../io/global-log-io-queue"
 import IOOperation from "../io/io-operation"
-import ReadIOOperation from "../io/read-io-operation"
+import ReadConfigIOOperation from "../io/read-config-io-operation"
+import ReadHeadIOOperation from "../io/read-head-io-operation"
+import ReadRangeIOOperation from "../io/read-range-io-operation"
 import WriteIOOperation from "../io/write-io-operation"
 import PersistedLog from "./persisted-log"
 
-type LogIop = {
+type LogOp = {
     entryNum: number
     offset: number
-    iOp: WriteIOOperation
+    op: WriteIOOperation
+    logEntry: GlobalLogEntry | LogLogEntry
 }
-type LogIopInfo = {
+type LogOpInfo = {
     logId: LogId
     maxEntryNum: number
-    iOps: LogIop[]
+    ops: LogOp[]
 }
 
 export default class GlobalLog extends PersistedLog {
@@ -32,8 +37,8 @@ export default class GlobalLog extends PersistedLog {
         super(args)
     }
 
-    enqueueIOp(iop: IOOperation): void {
-        this.ioQueue.enqueue(iop)
+    enqueueIOp(iOp: IOOperation): void {
+        this.ioQueue.enqueue(iOp)
 
         if (!this.ioBlocked && this.ioInProgress === null) {
             this.processIOps()
@@ -41,37 +46,130 @@ export default class GlobalLog extends PersistedLog {
     }
 
     processIOps() {
-        if (!this.ioBlocked) {
+        if (this.ioBlocked) {
             return
         }
         if (this.ioInProgress !== null) {
             return
         }
-        this.ioInProgress = this.processIOpsAsync()
-            .catch((err) => {
-                console.error(err)
-            })
-            .then(() => {
-                if (this.ioQueue.opPending()) {
-                    setTimeout(() => {
-                        this.processIOps()
-                    }, 0)
-                }
-            })
+        this.ioInProgress = this.processIOpsAsync().then(() => {
+            this.ioInProgress = null
+            if (this.ioQueue.opPending()) {
+                setTimeout(() => {
+                    this.processIOps()
+                }, 0)
+            }
+        })
     }
 
     async processIOpsAsync(): Promise<void> {
-        if (!this.ioQueue.opPending()) {
-            return
+        try {
+            if (!this.ioQueue.opPending()) {
+                return
+            }
+            const [readOps, writeOps] = this.ioQueue.getReady()
+            await Promise.all([this.processReads(readOps), this.processWrites(writeOps)])
+        } catch (err) {
+            console.error(err)
         }
-        const [readOps, writeOps] = this.ioQueue.getReady()
-
-        await Promise.all([this.processReads(readOps), this.processWrites(writeOps)])
     }
 
-    async processReads(ops: ReadIOOperation[]): Promise<void> {}
+    async processReads(ops: ReadIOOperation[]): Promise<void> {
+        return new Promise((resolve, reject) => {
+            try {
+                this._processReadOps(ops, resolve)
+            } catch (err) {
+                reject(err)
+            }
+        })
+    }
 
-    async processWrites(iOps: WriteIOOperation[]): Promise<void> {
+    _processReadOps(ops: ReadIOOperation[], resolve: (value: void | PromiseLike<void>) => void): void {
+        while (ops.length > 0) {
+            let fh = this.getReadFH()
+            if (fh === null) {
+                break
+            }
+            const op = ops.shift()!
+            this._processReadOp(op, fh)
+                .then(() => this.doneReadFH(fh!))
+                .catch((err) => {
+                    op.completeWithError(err)
+                    if (fh !== null) this.closeReadFH(fh)
+                })
+        }
+        if (ops.length === 0) {
+            resolve()
+        } else {
+            setTimeout(() => {
+                this._processReadOps(ops, resolve)
+            }, 0)
+        }
+    }
+
+    async _processReadOp(op: ReadIOOperation, fh: FileHandle): Promise<void> {
+        switch (op.op) {
+            case IOOperationType.READ_HEAD:
+                return this._processReadHeadOp(op as ReadHeadIOOperation, fh)
+            case IOOperationType.READ_RANGE:
+                return this._processReadRangeOp(op as ReadRangeIOOperation, fh)
+            case IOOperationType.READ_CONFIG:
+                return this._processReadConfigOp(op as ReadConfigIOOperation, fh)
+            default:
+                throw new Error("unknown IO op")
+        }
+    }
+
+    async _processReadRangeOp(op: ReadRangeIOOperation, fh: FileHandle): Promise<void> {}
+
+    async _processReadHeadOp(op: ReadHeadIOOperation, fh: FileHandle): Promise<void> {
+        const log = this.persist.getLog(op.logId!)
+        const [entry, bytesRead] = await this._processReadGlobalLogEntry(fh, op.logId!, ...log.getLastGlobalEntry())
+        op.entry = entry
+        op.bytesRead = bytesRead
+        op.complete(op)
+    }
+
+    async _processReadConfigOp(op: ReadConfigIOOperation, fh: FileHandle): Promise<void> {
+        const log = this.persist.getLog(op.logId!)
+        const [entry, bytesRead] = await this._processReadGlobalLogEntry(fh, op.logId!, ...log.getLastGlobalConfig())
+        op.entry = entry
+        op.bytesRead = bytesRead
+        op.complete(op)
+    }
+
+    async _processReadGlobalLogEntry(
+        fh: FileHandle,
+        logId: LogId,
+        entryNum: number,
+        offset: number,
+        length: number,
+    ): Promise<[GlobalLogEntry, number]> {
+        const u8 = new Uint8Array(length)
+        const { bytesRead } = await fh.read({ buffer: u8, position: offset, length })
+        if (bytesRead !== length) {
+            throw new Error(
+                `bytesRead error entryNum=${entryNum} offset=${offset} length=${length} bytesRead=${bytesRead}`,
+            )
+        }
+        const entry = GlobalLogEntryFactory.fromU8(u8)
+        if (entry.logId.base64() !== logId.base64()) {
+            throw new Error(
+                `logId mismatch logId=${logId.base64()} entry.logId=${entry.logId.base64()} entryNum=${entryNum} offset=${offset} length=${length}`,
+            )
+        }
+        if (!entry.verify()) {
+            throw new Error(`crc verify error entryNum=${entryNum} offset=${offset} length=${length}`)
+        }
+        if (entry.entryNum !== entryNum) {
+            throw new Error(
+                `entryNum mismatch entryNum=${entryNum} entry.entryNum=${entry.entryNum} offset=${offset} length=${length}`,
+            )
+        }
+        return [entry, bytesRead]
+    }
+
+    async processWrites(ops: WriteIOOperation[]): Promise<void> {
         try {
             // build list of all buffers to write
             const u8s: Uint8Array[] = []
@@ -83,41 +181,44 @@ export default class GlobalLog extends PersistedLog {
                     ? this.byteLength % GLOBAL_LOG_CHECKPOINT_INTERVAL
                     : this.byteLength
             // keep track of logOffset for each logId as this may be incremented with multiple writes during a batch
-            const logIops = new Map<string, LogIopInfo>()
+            const logOps = new Map<string, LogOpInfo>()
+            const globalOps: LogOp[] = []
             // offset of entry from length of file + bytes written in current write
             const entryOffset = this.byteLength + writeBytes
             // add all items from queue to list of u8s to write
-            for (const iOp of iOps) {
-                let logEntry: LogEntry
-                let logIopInfo: LogIopInfo | null = null
+            for (const op of ops) {
+                let logEntry: GlobalLogEntry | LogLogEntry
+                let logOpInfo: LogOpInfo | null = null
                 // this is a command entry for the global log
-                if (iOp.logId === null) {
+                if (op.logId === null) {
                     // global logs are ephemeral so they do not have a real entryNum
-                    logEntry = new LogLogEntry({ entry: iOp.entry, entryNum: 0 })
+                    logEntry = new LogLogEntry({ entry: op.entry, entryNum: 0 })
+                    globalOps.push({ entryNum: 0, offset: entryOffset, op: op, logEntry })
                 }
                 // this is a log entry for a log log
                 else {
-                    const logIdBase64 = iOp.logId.base64()
+                    const logIdBase64 = op.logId.base64()
                     // create/get log offset for this logId
-                    if (!logIops.has(logIdBase64)) {
-                        logIops.set(logIdBase64, {
-                            logId: iOp.logId,
-                            maxEntryNum: this.persist.getLog(iOp.logId).maxEntryNum(),
-                            iOps: [],
+                    if (!logOps.has(logIdBase64)) {
+                        logOps.set(logIdBase64, {
+                            logId: op.logId,
+                            maxEntryNum: this.persist.getLog(op.logId).maxEntryNum(),
+                            ops: [],
                         })
                     }
-                    logIopInfo = logIops.get(logIdBase64)!
-                    logIopInfo.maxEntryNum += 1
+                    logOpInfo = logOps.get(logIdBase64)!
+                    logOpInfo.maxEntryNum += 1
                     logEntry = new GlobalLogEntry({
-                        logId: iOp.logId,
-                        entryNum: logIopInfo.maxEntryNum,
-                        entry: iOp.entry,
+                        logId: op.logId,
+                        entryNum: logOpInfo.maxEntryNum,
+                        entry: op.entry,
                     })
                     // and entry to local index which will be merged to global index after write completes
-                    logIopInfo.iOps.push({
-                        entryNum: logIopInfo.maxEntryNum,
+                    logOpInfo.ops.push({
+                        entryNum: logOpInfo.maxEntryNum,
                         offset: entryOffset,
-                        iOp: iOp,
+                        op: op,
+                        logEntry,
                     })
                 }
                 // bytes since last checkpoint including this entry
@@ -181,19 +282,25 @@ export default class GlobalLog extends PersistedLog {
                 }
             }
 
-            for (const iOpInfo of logIops.values()) {
-                const log = this.persist.getLog(iOpInfo.logId)
-                for (const iOp of iOpInfo.iOps) {
-                    iOp.iOp.bytesWritten = iOp.iOp.entry.byteLength()
+            for (const opInfo of globalOps) {
+                opInfo.op.bytesWritten = opInfo.logEntry.byteLength()
+            }
+
+            for (const opInfo of logOps.values()) {
+                const log = this.persist.getLog(opInfo.logId)
+                for (const op of opInfo.ops) {
+                    op.op.bytesWritten = op.logEntry.byteLength()
                     // global log writes always go to hot log
-                    log.addNewHotLogEntry(iOp.iOp.entry, iOp.entryNum, iOp.offset, iOp.iOp.entry.byteLength())
+                    log.addNewHotLogEntry(op.op.entry, op.entryNum, op.offset, op.logEntry.byteLength())
+                    // set the entry for the op to the created log entry
+                    op.op.entry = op.logEntry
                     // resolves promise for iOp
-                    iOp.iOp.complete()
+                    op.op.complete(op.op)
                 }
             }
         } catch (err) {
             // reject promises for all iOps
-            for (const iOp of iOps) {
+            for (const iOp of ops) {
                 iOp.completeWithError(err)
             }
             // rethrow error to notify caller
@@ -302,11 +409,11 @@ export default class GlobalLog extends PersistedLog {
         }
         const persistLog = this.persist.getLog(entry.logId)
         if (this.isNewHotLog) {
-            persistLog.addNewHotLogEntry(entry, entry.entryNum, globalOffset, entry.byteLength())
+            persistLog.addNewHotLogEntry(entry.entry, entry.entryNum, globalOffset, entry.byteLength())
         } else if (this.isColdLog) {
-            persistLog.addColdLogEntry(entry, entry.entryNum, globalOffset, entry.byteLength())
+            persistLog.addColdLogEntry(entry.entry, entry.entryNum, globalOffset, entry.byteLength())
         } else if (this.isOldHotLog) {
-            persistLog.addOldHotLogEntry(entry, entry.entryNum, globalOffset, entry.byteLength())
+            persistLog.addOldHotLogEntry(entry.entry, entry.entryNum, globalOffset, entry.byteLength())
         } else {
             throw new Error("unknown log type")
         }

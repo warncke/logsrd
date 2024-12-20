@@ -8,8 +8,8 @@ export default class IOOperation {
     op: IOOperationType
     logId: LogId | null
     promise: Promise<any>
-    resolve: ((value: any) => void) | null
-    reject: ((reason?: any) => void) | null
+    resolve: ((op: IOOperation) => void) | null
+    reject: ((err?: any) => void) | null
     startTime: number
     endTime: number = 0
     processing: boolean = false
@@ -37,7 +37,7 @@ export default class IOOperation {
         this.order = GLOBAL_ORDER++
     }
 
-    complete(value?: any, retried: boolean = false) {
+    complete(op: IOOperation, retried: boolean = false) {
         this.endTime = Date.now()
         // this shouldnt happen because scheduling of IO should be after the function in promise is run
         if (this.resolve === null) {
@@ -45,11 +45,11 @@ export default class IOOperation {
             // try once more
             if (!retried) {
                 setTimeout(() => {
-                    this.complete(value, true)
+                    this.complete(op, true)
                 }, 0)
             }
         } else {
-            this.resolve(value)
+            this.resolve(op)
         }
     }
 

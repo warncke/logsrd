@@ -11,6 +11,9 @@ import LogLogCheckpoint from "./entry/log-log-checkpoint"
 import LogLogEntry from "./entry/log-log-entry"
 import LogId from "./log-id"
 import Persist from "./persist"
+import ReadConfigIOOperation from "./persist/io/read-config-io-operation"
+import ReadHeadIOOperation from "./persist/io/read-head-io-operation"
+import ReadRangeIOOperation from "./persist/io/read-range-io-operation"
 
 /**
  * Maximum entry size of 32KB and maximum log size of 16MB are temporary limitations
@@ -92,9 +95,13 @@ export const LOG_TYPE_MAP: { [index: string]: LogType } = {
 }
 
 export enum IOOperationType {
-    READ,
+    READ_RANGE,
+    READ_HEAD,
+    READ_CONFIG,
     WRITE,
 }
+
+export type ReadIOOperation = ReadConfigIOOperation | ReadHeadIOOperation | ReadRangeIOOperation
 
 /**
  * Error thrown by log writer if a write was aborted.

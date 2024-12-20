@@ -1,5 +1,5 @@
+import { IOOperationType, ReadIOOperation } from "../../globals"
 import IOOperation from "./io-operation"
-import ReadIOOperation from "./read-io-operation"
 import WriteIOOperation from "./write-io-operation"
 
 export default class IOQueue {
@@ -28,32 +28,32 @@ export default class IOQueue {
         }
         const readOps: ReadIOOperation[] = []
         const writeOps: WriteIOOperation[] = []
-        // and pending items are in oldQueue now
+        // pending items are in oldQueue now
         for (let i = 0; i < this.oldQueue!.length; i++) {
-            const item = this.oldQueue![i]
+            const op = this.oldQueue![i]
             // TODO: this can be optimized further by tracking dependencies between different
             // types of read/write ops (e.g. reads for config could proceed before writes as
             // long as the write is not a config) but this is more complex so doing it simple
             // for now
 
             // item is read
-            if (item instanceof ReadIOOperation) {
+            if (op.op in [IOOperationType.READ_HEAD, IOOperationType.READ_RANGE, IOOperationType.READ_CONFIG]) {
                 if (writeOps.length > 0) {
                     // do not take read after write
                     break
                 } else {
-                    item.processing = true
-                    readOps.push(item)
+                    op.processing = true
+                    readOps.push(op as ReadIOOperation)
                 }
             }
             // item is write
-            else if (item instanceof WriteIOOperation) {
+            else if (op.op === IOOperationType.WRITE) {
                 if (readOps.length > 0) {
                     // do not take write after read
                     break
                 } else {
-                    item.processing = true
-                    writeOps.push(item)
+                    op.processing = true
+                    writeOps.push(op as WriteIOOperation)
                 }
             } else {
                 throw new Error("unknown op type")
@@ -70,7 +70,9 @@ export default class IOQueue {
         // removed any processed items from queue or return if there are unprocessed items
         if (this.oldQueue !== null) {
             while (this.oldQueue.length > 0) {
-                if (this.oldQueue[0].processing === true && this.oldQueue[0].endTime === 0) {
+                if (this.oldQueue[0].processing === false) {
+                    return true
+                } else if (this.oldQueue[0].processing === true && this.oldQueue[0].endTime === 0) {
                     return false
                 } else {
                     this.oldQueue.shift()

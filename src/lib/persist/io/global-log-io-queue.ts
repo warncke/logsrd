@@ -1,15 +1,11 @@
-import LogId from "../log-id"
-import IOOperation from "./io/io-operation"
-import IOQueue from "./io/io-queue"
-import ReadIOOperation from "./io/read-io-operation"
-import WriteIOOperation from "./io/write-io-operation"
+import { ReadIOOperation } from "../../globals"
+import LogId from "../../log-id"
+import IOOperation from "./io-operation"
+import IOQueue from "./io-queue"
+import WriteIOOperation from "./write-io-operation"
 
 export default class GlobalLogIOQueue {
     queues: Map<string, IOQueue> = new Map()
-
-    constructor() {
-        this.queues.set("global", new IOQueue())
-    }
 
     enqueue(item: IOOperation) {
         if (item.logId === null) {
@@ -27,6 +23,9 @@ export default class GlobalLogIOQueue {
     }
 
     getGlobalQueue(): IOQueue {
+        if (!this.queues.has("global")) {
+            this.queues.set("global", new IOQueue())
+        }
         return this.queues.get("global")!
     }
 

@@ -1,5 +1,9 @@
 import uWS, { HttpResponse, RecognizedString } from "uWebSockets.js"
 
+import BinaryLogEntry from "./lib/entry/binary-log-entry"
+import JSONCommandType from "./lib/entry/command/command-type/json-command-type"
+import CreateLogCommand from "./lib/entry/command/create-log-command"
+import SetConfigCommand from "./lib/entry/command/set-config-command"
 import JSONLogEntry from "./lib/entry/json-log-entry"
 import { MAX_ENTRY_SIZE } from "./lib/globals"
 import LogId from "./lib/log-id"
@@ -21,6 +25,8 @@ const LOG_NOT_FOUND_ERROR = "Log not found"
 const LOG_OR_HEAD_NOT_FOUND_ERROR = "Log not found or log has no entries"
 const SERVER_ERROR = "Server error"
 const MAX_POST_SIZE_ERROR = `Max post size ${MAX_ENTRY_SIZE} bytes exceeded`
+const INVALID_ENTRY_TYPE_ERROR = "Invalid entry type"
+
 const NO_ENTRIES_INFO = "No entries"
 
 async function run(): Promise<void> {
@@ -144,7 +150,7 @@ async function run(): Promise<void> {
                 }
 
                 try {
-                    const crc = await server.appendLog(logId, data)
+                    const { entryNum, crc } = await server.appendLog(logId, data)
 
                     if (ABORTED) return
 
@@ -155,7 +161,7 @@ async function run(): Promise<void> {
                         })
                     } else {
                         res.cork(() => {
-                            res.end(JSON.stringify({ crc }))
+                            res.end(JSON.stringify({ entryNum, crc }))
                         })
                     }
                 } catch (err: any) {
@@ -243,18 +249,17 @@ async function run(): Promise<void> {
 
             if (ABORTED) return
 
-            if (entry === null) {
-                res.cork(() => {
-                    res.writeStatus("404")
-                    expectJSON
-                        ? res.end(JSON.stringify({ error: LOG_OR_HEAD_NOT_FOUND_ERROR }))
-                        : res.end(LOG_OR_HEAD_NOT_FOUND_ERROR)
-                })
-            } else {
-                res.cork(() => {
-                    res.end(entry instanceof JSONLogEntry ? entry.jsonU8() : entry.u8)
-                })
-            }
+            res.cork(() => {
+                if (entry.entry instanceof JSONLogEntry) {
+                    res.end(entry.entry.jsonU8())
+                } else if (entry.entry instanceof BinaryLogEntry) {
+                    res.end(entry.entry.u8)
+                } else if (entry.entry instanceof JSONCommandType) {
+                    res.end(entry.entry.commandValueU8)
+                } else {
+                    res.end(JSON.stringify({ error: INVALID_ENTRY_TYPE_ERROR }))
+                }
+            })
         } catch (err: any) {
             if (ABORTED) return
 

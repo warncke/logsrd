@@ -1,5 +1,5 @@
-import CommandLogEntryFactory from "./entry/command-log-entry-factory"
-import { ENTRY_CLASS, EntryType } from "./globals"
+import { ENTRY_CLASS, EntryType } from "../globals"
+import CommandLogEntryFactory from "./command-log-entry-factory"
 import LogEntry from "./log-entry"
 
 export default class LogEntryFactory {

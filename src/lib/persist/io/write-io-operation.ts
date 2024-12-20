@@ -1,5 +1,5 @@
+import LogEntry from "../../entry/log-entry"
 import { IOOperationType } from "../../globals"
-import LogEntry from "../../log-entry"
 import LogId from "../../log-id"
 import IOOperation from "./io-operation"
 

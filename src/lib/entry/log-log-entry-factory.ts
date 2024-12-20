@@ -1,6 +1,6 @@
-import LogLogEntry from "./entry/log-log-entry"
-import { EntryType, LOG_LOG_PREFIX_BYTE_LENGTH } from "./globals"
+import { EntryType, LOG_LOG_PREFIX_BYTE_LENGTH } from "../globals"
 import LogEntry from "./log-entry"
+import LogLogEntry from "./log-log-entry"
 
 export default class LogLogEntryFactory {
     static fromU8(u8: Uint8Array): LogLogEntry {
