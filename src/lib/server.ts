@@ -2,6 +2,7 @@ import BinaryLogEntry from "./entry/binary-log-entry"
 import GlobalLogEntry from "./entry/global-log-entry"
 import JSONLogEntry from "./entry/json-log-entry"
 import LogLogEntry from "./entry/log-log-entry"
+import { MAX_RESPONSE_ENTRIES } from "./globals"
 import LogConfig from "./log-config"
 import LogId from "./log-id"
 import Persist from "./persist"
@@ -55,6 +56,30 @@ export default class Server {
     async getConfig(logId: LogId): Promise<LogConfig> {
         let config = await this.persist.getLog(logId).getConfig()
         return config
+    }
+
+    async getEntries(
+        logId: LogId,
+        entryNum: string | undefined,
+        offset: string | undefined,
+        limit: string | undefined,
+    ): Promise<Array<GlobalLogEntry | LogLogEntry>> {
+        if (typeof entryNum === "string" && entryNum.length > 0) {
+            const entryNums = entryNum
+                .split(",")
+                .map(parseInt)
+                .filter((entryNum) => entryNum >= 0)
+            if (entryNums.length === 0) {
+                throw new Error("invalid entryNum")
+            }
+            if (entryNum.length > MAX_RESPONSE_ENTRIES) {
+                throw new Error(`Maximum number of entries is ${MAX_RESPONSE_ENTRIES}`)
+            }
+            let entries = await this.persist.getLog(logId).getEntries(entryNums)
+            return entries
+        } else {
+            throw new Error("not implemented")
+        }
     }
 
     async getHead(logId: LogId): Promise<GlobalLogEntry | LogLogEntry> {

@@ -1,12 +1,9 @@
 import fs from "node:fs/promises"
 import path from "path"
 
-import BinaryLogEntry from "../entry/binary-log-entry"
 import JSONCommandType from "../entry/command/command-type/json-command-type"
 import CreateLogCommand from "../entry/command/create-log-command"
-import SetConfigCommand from "../entry/command/set-config-command"
 import GlobalLogEntry from "../entry/global-log-entry"
-import JSONLogEntry from "../entry/json-log-entry"
 import LogEntry from "../entry/log-entry"
 import LogLogEntry from "../entry/log-log-entry"
 import LogConfig from "../log-config"
@@ -56,10 +53,10 @@ export default class PersistLog {
         }
         this.creating = true
         const entry = new CreateLogCommand({ value: config })
-        const op = new WriteIOOperation(entry, this.logId)
+        let op = new WriteIOOperation(entry, this.logId)
         this.persist.newHotLog.enqueueIOp(op)
         try {
-            await op.promise
+            op = await op.promise
         } catch (err) {
             throw err
         } finally {
@@ -159,11 +156,15 @@ export default class PersistLog {
         if (op.entry === null) {
             throw new Error("entry is null")
         }
-        if (op.entry instanceof GlobalLogEntry || op.entry instanceof LogLogEntry) {
-            return op.entry
-        } else {
-            throw new Error("Invalid entry type for config")
-        }
+        return op.entry
+    }
+
+    async getEntries(
+        entryNums: number[],
+        offset?: number,
+        limit?: number,
+    ): Promise<Array<GlobalLogEntry | LogLogEntry>> {
+        return []
     }
 
     maxEntryNum(): number {

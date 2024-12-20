@@ -1,10 +1,5 @@
-import uWS, { HttpResponse, RecognizedString } from "uWebSockets.js"
+import uWS, { HttpResponse } from "uWebSockets.js"
 
-import BinaryLogEntry from "./lib/entry/binary-log-entry"
-import JSONCommandType from "./lib/entry/command/command-type/json-command-type"
-import CreateLogCommand from "./lib/entry/command/create-log-command"
-import SetConfigCommand from "./lib/entry/command/set-config-command"
-import JSONLogEntry from "./lib/entry/json-log-entry"
 import { MAX_ENTRY_SIZE } from "./lib/globals"
 import LogId from "./lib/log-id"
 import Persist from "./lib/persist"
@@ -26,6 +21,7 @@ const LOG_OR_HEAD_NOT_FOUND_ERROR = "Log not found or log has no entries"
 const SERVER_ERROR = "Server error"
 const MAX_POST_SIZE_ERROR = `Max post size ${MAX_ENTRY_SIZE} bytes exceeded`
 const INVALID_ENTRY_TYPE_ERROR = "Invalid entry type"
+const INVALID_LOG_TYPE_ERROR = "Invalid log type"
 
 const NO_ENTRIES_INFO = "No entries"
 
@@ -48,259 +44,27 @@ async function run(): Promise<void> {
 
     const logsrd = uWS.App({})
 
-    /* Create Log */
-    logsrd.post("/log", async (res, req) => {
-        const contentType = req.getHeader("content-type")
-        if (!contentType.startsWith("application/json")) {
-            res.cork(() => {
-                res.writeStatus("400")
-                res.end(JSON_REQUIRED_ERROR)
-            })
-            return
-        }
-
-        res.onAborted(() => {
-            res.aborted = true
-        })
-
-        /* Read the body until done or error */
-        readPost(
-            res,
-            async (data: Uint8Array) => {
-                if (res.aborted) return
-
-                if (data.length > MAX_ENTRY_SIZE) {
-                    res.cork(() => {
-                        res.writeStatus("400")
-                        res.end(MAX_POST_SIZE_ERROR)
-                    })
-                    return
-                }
-                let jsonObj: any
-                try {
-                    jsonObj = JSON.parse(new TextDecoder().decode(data))
-                } catch (err: any) {
-                    res.cork(() => {
-                        res.writeStatus("400")
-                        res.end(INVALID_JSON_POST_ERROR)
-                    })
-                    return
-                }
-                try {
-                    const config = await server.createLog(jsonObj)
-
-                    if (res.aborted) return
-
-                    if (config === null) {
-                        res.cork(() => {
-                            res.writeStatus("400")
-                            res.end(JSON.stringify({ error: LOG_CREATE_ERROR }))
-                        })
-                    } else {
-                        res.cork(() => {
-                            res.end(JSON.stringify(config))
-                        })
-                    }
-                } catch (err: any) {
-                    if (res.aborted) return
-
-                    res.cork(() => {
-                        res.writeStatus("400")
-                        res.end(JSON.stringify({ error: err.message, stack: err.stack }))
-                    })
-                }
-            },
-            () => {
-                // invalid json or no data res is aborted now so no response can be given
-            },
-        )
-    })
-
-    /* Append Log */
-    logsrd.post("/log/:logid", async (res, req) => {
-        const logIdBase64 = req.getParameter(0)
-
-        if (!logIdBase64 || logIdBase64.length !== 22) {
-            res.cork(() => {
-                res.writeStatus("404")
-                res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR }))
-            })
-            return
-        }
-
-        res.onAborted(() => {
-            res.aborted = true
-        })
-
-        /* Read the body until done or error */
-        readPost(
-            res,
-            async (data: Uint8Array) => {
-                if (res.aborted) return
-
-                if (data.length > MAX_ENTRY_SIZE) {
-                    res.cork(() => {
-                        res.writeStatus("400")
-                        res.end(MAX_POST_SIZE_ERROR)
-                    })
-                    return
-                }
-
-                try {
-                    const logId = LogId.newFromBase64(logIdBase64)
-
-                    const entry = await server.appendLog(logId, data)
-
-                    if (res.aborted) return
-
-                    res.cork(() => {
-                        res.end(JSON.stringify({ entryNum: entry.entryNum, crc: entry.cksumNum }))
-                    })
-                } catch (err: any) {
-                    if (res.aborted) return
-
-                    res.cork(() => {
-                        res.writeStatus("400")
-                        res.end(JSON.stringify({ error: err.message, stack: err.stack }))
-                    })
-                }
-            },
-            () => {
-                // res aborted - no response possible
-            },
-        )
-    })
-
-    /* Get Log Config */
-    logsrd.get("/log/:logid/config", async (res, req) => {
-        let contentType = req.getHeader("content-type")
-        const expectJSON = contentType.startsWith("application/json")
-        const logIdBase64 = req.getParameter(0)
-
-        if (!logIdBase64 || logIdBase64.length !== 22) {
-            res.cork(() => {
-                res.writeStatus("404")
-                expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
-            })
-            return
-        }
-
-        res.onAborted(() => {
-            res.aborted = true
-        })
-        try {
-            const logId = LogId.newFromBase64(logIdBase64)
-
-            const config = await server.getConfig(logId)
-
-            if (res.aborted) return
-
-            if (config === null) {
-                res.cork(() => {
-                    res.writeStatus("404")
-                    expectJSON ? res.end(JSON.stringify({ error: LOG_NOT_FOUND_ERROR })) : res.end(LOG_NOT_FOUND_ERROR)
-                })
-            } else {
-                res.cork(() => {
-                    res.end(JSON.stringify(config))
-                })
-            }
-        } catch (err: any) {
-            if (res.aborted) return
-
-            res.cork(() => {
-                res.writeStatus("400")
-                expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
-            })
-        }
-    })
-
-    /* Get last entry from log */
-    logsrd.get("/log/:logid/head", async (res, req) => {
-        let contentType = req.getHeader("content-type")
-        const expectJSON = contentType.startsWith("application/json")
-        const logIdBase64 = req.getParameter(0)
-
-        if (!logIdBase64 || logIdBase64.length !== 22) {
-            res.cork(() => {
-                res.writeStatus("404")
-                expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
-            })
-            return
-        }
-
-        res.onAborted(() => {
-            res.aborted = true
-        })
-        try {
-            const logId = LogId.newFromBase64(logIdBase64)
-
-            const entry = await server.getHead(logId)
-
-            if (res.aborted) return
-
-            res.cork(() => {
-                res.end(entry.u8())
-            })
-        } catch (err: any) {
-            if (res.aborted) return
-
-            res.cork(() => {
-                res.writeStatus("400")
-                expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
-            })
-        }
-    })
-
-    /* get list of entries from log */
-    logsrd.get("/log/:logid/entries", async (res, req) => {
-        let contentType = req.getHeader("content-type")
-        const expectJSON = contentType.startsWith("application/json")
-        const logIdBase64 = req.getParameter(0)
-        const offset = req.getQuery("offset")
-        const limit = req.getQuery("limit")
-        const entryNum = req.getQuery("entryNum")
-
-        if (!logIdBase64 || logIdBase64.length !== 22) {
-            res.cork(() => {
-                res.writeStatus("404")
-                expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
-            })
-            return
-        }
-
-        res.onAborted(() => {
-            res.aborted = true
-        })
-        try {
-            const logId = LogId.newFromBase64(logIdBase64)
-
-            const entry = await server.getHead(logId)
-
-            if (res.aborted) return
-
-            res.cork(() => {
-                res.end(entry.u8())
-            })
-        } catch (err: any) {
-            if (res.aborted) return
-
-            res.cork(() => {
-                res.writeStatus("400")
-                expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
-            })
-        }
-    })
+    logsrd.post("/log", (res, req) => createLog(server, res, req))
+    logsrd.post("/log/:logid", (res, req) => appendLog(server, res, req))
+    logsrd.get("/log/:logid/config", (res, req) => getConfig(server, res, req))
+    logsrd.get("/log/:logid/head", (res, req) => getHead(server, res, req))
+    logsrd.get("/log/:logid/entries", (res, req) => getEntries(server, res, req))
 
     /* Get current version from server */
-    logsrd.get("/version", async (res, req) => {
+    logsrd.get("/version", async (res) => {
         res.cork(() => {
             res.end(version)
         })
     })
 
+    /**
+     * !!! ADMIN ROUTES !!!
+     *
+     * These are used for testing and should be disabled or secured in production
+     */
+
     /* Unhandled Routes */
-    logsrd.get("/*", (res, req) => {
+    logsrd.get("/*", (res) => {
         res.cork(() => {
             res.writeStatus("404")
             res.end("Not found")
@@ -349,4 +113,266 @@ function readPost(res: HttpResponse, cb: (data: Uint8Array) => void, err: () => 
 
     /* Register error cb */
     res.onAborted(err)
+}
+
+async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
+    const contentType = req.getHeader("content-type")
+    if (!contentType.startsWith("application/json")) {
+        res.cork(() => {
+            res.writeStatus("400")
+            res.end(JSON_REQUIRED_ERROR)
+        })
+        return
+    }
+
+    res.onAborted(() => {
+        res.aborted = true
+    })
+
+    /* Read the body until done or error */
+    readPost(
+        res,
+        async (data: Uint8Array) => {
+            if (res.aborted) return
+
+            if (data.length > MAX_ENTRY_SIZE) {
+                res.cork(() => {
+                    res.writeStatus("400")
+                    res.end(MAX_POST_SIZE_ERROR)
+                })
+                return
+            }
+            let jsonObj: any
+            try {
+                jsonObj = JSON.parse(new TextDecoder().decode(data))
+            } catch (err: any) {
+                res.cork(() => {
+                    res.writeStatus("400")
+                    res.end(INVALID_JSON_POST_ERROR)
+                })
+                return
+            }
+            try {
+                const config = await server.createLog(jsonObj)
+
+                if (res.aborted) return
+
+                if (config === null) {
+                    res.cork(() => {
+                        res.writeStatus("400")
+                        res.end(JSON.stringify({ error: LOG_CREATE_ERROR }))
+                    })
+                } else {
+                    res.cork(() => {
+                        res.end(JSON.stringify(config))
+                    })
+                }
+            } catch (err: any) {
+                if (res.aborted) return
+
+                res.cork(() => {
+                    res.writeStatus("400")
+                    res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                })
+            }
+        },
+        () => {
+            // invalid json or no data res is aborted now so no response can be given
+        },
+    )
+}
+
+async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
+    const logIdBase64 = req.getParameter(0)
+
+    if (!logIdBase64 || logIdBase64.length !== 22) {
+        res.cork(() => {
+            res.writeStatus("404")
+            res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR }))
+        })
+        return
+    }
+
+    res.onAborted(() => {
+        res.aborted = true
+    })
+
+    /* Read the body until done or error */
+    readPost(
+        res,
+        async (data: Uint8Array) => {
+            if (res.aborted) return
+
+            if (data.length > MAX_ENTRY_SIZE) {
+                res.cork(() => {
+                    res.writeStatus("400")
+                    res.end(MAX_POST_SIZE_ERROR)
+                })
+                return
+            }
+
+            try {
+                const logId = LogId.newFromBase64(logIdBase64)
+
+                const entry = await server.appendLog(logId, data)
+
+                if (res.aborted) return
+
+                res.cork(() => {
+                    res.end(JSON.stringify({ entryNum: entry.entryNum, crc: entry.cksumNum }))
+                })
+            } catch (err: any) {
+                if (res.aborted) return
+
+                res.cork(() => {
+                    res.writeStatus("400")
+                    res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                })
+            }
+        },
+        () => {
+            // res aborted - no response possible
+        },
+    )
+}
+
+async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
+    let contentType = req.getHeader("content-type")
+    const expectJSON = contentType.startsWith("application/json")
+    const logIdBase64 = req.getParameter(0)
+
+    if (!logIdBase64 || logIdBase64.length !== 22) {
+        res.cork(() => {
+            res.writeStatus("404")
+            expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
+        })
+        return
+    }
+
+    res.onAborted(() => {
+        res.aborted = true
+    })
+    try {
+        const logId = LogId.newFromBase64(logIdBase64)
+
+        const config = await server.getConfig(logId)
+
+        if (res.aborted) return
+
+        if (config === null) {
+            res.cork(() => {
+                res.writeStatus("404")
+                expectJSON ? res.end(JSON.stringify({ error: LOG_NOT_FOUND_ERROR })) : res.end(LOG_NOT_FOUND_ERROR)
+            })
+        } else {
+            res.cork(() => {
+                res.end(JSON.stringify(config))
+            })
+        }
+    } catch (err: any) {
+        if (res.aborted) return
+
+        res.cork(() => {
+            res.writeStatus("400")
+            expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
+        })
+    }
+}
+
+async function getHead(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
+    let contentType = req.getHeader("content-type")
+    const expectJSON = contentType.startsWith("application/json")
+    const logIdBase64 = req.getParameter(0)
+
+    if (!logIdBase64 || logIdBase64.length !== 22) {
+        res.cork(() => {
+            res.writeStatus("404")
+            expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
+        })
+        return
+    }
+
+    res.onAborted(() => {
+        res.aborted = true
+    })
+    try {
+        const logId = LogId.newFromBase64(logIdBase64)
+
+        const entry = await server.getHead(logId)
+
+        if (res.aborted) return
+
+        res.cork(() => {
+            res.end(entry.u8())
+        })
+    } catch (err: any) {
+        if (res.aborted) return
+
+        res.cork(() => {
+            res.writeStatus("400")
+            expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
+        })
+    }
+}
+
+async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
+    let contentType = req.getHeader("content-type")
+    const expectJSON = contentType.startsWith("application/json")
+    const logIdBase64 = req.getParameter(0)
+    const offset = req.getQuery("offset")
+    const limit = req.getQuery("limit")
+    const entryNum = req.getQuery("entryNum")
+
+    if (!logIdBase64 || logIdBase64.length !== 22) {
+        res.cork(() => {
+            res.writeStatus("404")
+            expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
+        })
+        return
+    }
+
+    res.onAborted(() => {
+        res.aborted = true
+    })
+    try {
+        const logId = LogId.newFromBase64(logIdBase64)
+        // TODO: this should be streaming instead of buffering everything
+        const config = await server.getConfig(logId)
+        const entries = await server.getEntries(logId, entryNum, offset, limit)
+
+        if (res.aborted) return
+
+        if (config.type === "json") {
+            res.cork(() => {
+                res.write("[")
+                for (const entry of entries) {
+                    res.write(entry.u8())
+                    res.write(",")
+                }
+                res.end("]")
+            })
+        } else if (config.type === "binary") {
+            res.cork(() => {
+                for (const entry of entries) {
+                    res.write(entry.u8())
+                }
+                res.end()
+            })
+        } else {
+            res.cork(() => {
+                res.writeStatus("404")
+                expectJSON
+                    ? res.end(JSON.stringify({ error: INVALID_LOG_TYPE_ERROR }))
+                    : res.end(INVALID_LOG_TYPE_ERROR)
+            })
+            return
+        }
+    } catch (err: any) {
+        if (res.aborted) return
+
+        res.cork(() => {
+            res.writeStatus("400")
+            expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
+        })
+    }
 }

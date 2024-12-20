@@ -277,6 +277,7 @@ export default class GlobalLog extends PersistedLog {
                 try {
                     await this.truncate(this.byteLength)
                 } catch (err) {
+                    // we are in a corrupted state here but still need this to be correct
                     this.byteLength += ret.bytesWritten
                     throw new Error(`Failed to write all bytes. Expected: ${writeBytes} Actual: ${ret.bytesWritten}`)
                 }
@@ -284,6 +285,8 @@ export default class GlobalLog extends PersistedLog {
 
             for (const opInfo of globalOps) {
                 opInfo.op.bytesWritten = opInfo.logEntry.byteLength()
+                // resolves promise for op
+                opInfo.op.complete(opInfo.op)
             }
 
             for (const opInfo of logOps.values()) {
@@ -294,14 +297,14 @@ export default class GlobalLog extends PersistedLog {
                     log.addNewHotLogEntry(op.op.entry, op.entryNum, op.offset, op.logEntry.byteLength())
                     // set the entry for the op to the created log entry
                     op.op.entry = op.logEntry
-                    // resolves promise for iOp
+                    // resolves promise for op
                     op.op.complete(op.op)
                 }
             }
         } catch (err) {
             // reject promises for all iOps
-            for (const iOp of ops) {
-                iOp.completeWithError(err)
+            for (const op of ops) {
+                op.completeWithError(err)
             }
             // rethrow error to notify caller
             throw err

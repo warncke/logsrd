@@ -22,6 +22,11 @@ export const MAX_ENTRY_SIZE = 2 ** 15
 export const MAX_LOG_SIZE = 2 ** 24
 
 /**
+ * Maximum number of entries to return in response
+ */
+export const MAX_RESPONSE_ENTRIES = 100
+
+/**
  * Every CommandLogEntry begins with a single byte interpreted as a little endian unsigned integer
  * that indicates the command name.
  */
