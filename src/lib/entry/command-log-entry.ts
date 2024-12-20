@@ -26,6 +26,10 @@ export default class CommandLogEntry extends LogEntry {
         return this.cksumNum
     }
 
+    u8(): Uint8Array {
+        return this.commandValueU8
+    }
+
     u8s(): Uint8Array[] {
         return [TYPE_BYTE, this.commandNameU8, this.commandValueU8]
     }

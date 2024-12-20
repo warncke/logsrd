@@ -38,6 +38,10 @@ export default class LogLogEntry extends LogEntry {
         return this.#prefixU8
     }
 
+    u8(): Uint8Array {
+        return this.entry.u8()
+    }
+
     u8s(): Uint8Array[] {
         return [this.prefixU8(), ...this.entry.u8s()]
     }

@@ -1,5 +1,3 @@
-import { crc32 } from "@node-rs/crc32"
-
 import { EntryType, GLOBAL_LOG_PREFIX_BYTE_LENGTH } from "../globals"
 import LogId from "../log-id"
 import LogEntry from "./log-entry"
@@ -43,6 +41,10 @@ export default class GlobalLogEntry extends LogEntry {
         this.#prefixU8.set(new Uint8Array(new Uint16Array([this.entry.byteLength()]).buffer), 21)
         this.#prefixU8.set(new Uint8Array(new Uint32Array([this.cksum()]).buffer), 23)
         return this.#prefixU8
+    }
+
+    u8(): Uint8Array {
+        return this.entry.u8()
     }
 
     u8s(): Uint8Array[] {

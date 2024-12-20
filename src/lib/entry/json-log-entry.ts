@@ -22,17 +22,17 @@ export default class JSONLogEntry extends LogEntry {
 
     byteLength(): number {
         // entry length is: 1 byte entry type + json.length
-        return 1 + this.jsonU8().byteLength
+        return 1 + this.u8().byteLength
     }
 
     cksum(entryNum: number): number {
         if (this.cksumNum === 0) {
-            this.cksumNum = crc32(this.jsonU8(), crc32(TYPE_BYTE, entryNum))
+            this.cksumNum = crc32(this.u8(), crc32(TYPE_BYTE, entryNum))
         }
         return this.cksumNum
     }
 
-    jsonU8(): Uint8Array {
+    u8(): Uint8Array {
         if (this.#jsonU8 !== null) {
             return this.#jsonU8
         } else if (this.#jsonStr !== null) {
@@ -44,7 +44,7 @@ export default class JSONLogEntry extends LogEntry {
     }
 
     u8s(): Uint8Array[] {
-        return [TYPE_BYTE, this.jsonU8()]
+        return [TYPE_BYTE, this.u8()]
     }
 
     static fromU8(u8: Uint8Array): JSONLogEntry {

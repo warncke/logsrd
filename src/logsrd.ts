@@ -59,16 +59,15 @@ async function run(): Promise<void> {
             return
         }
 
-        let ABORTED = false
         res.onAborted(() => {
-            ABORTED = true
+            res.aborted = true
         })
 
         /* Read the body until done or error */
         readPost(
             res,
             async (data: Uint8Array) => {
-                if (ABORTED) return
+                if (res.aborted) return
 
                 if (data.length > MAX_ENTRY_SIZE) {
                     res.cork(() => {
@@ -90,7 +89,7 @@ async function run(): Promise<void> {
                 try {
                     const config = await server.createLog(jsonObj)
 
-                    if (ABORTED) return
+                    if (res.aborted) return
 
                     if (config === null) {
                         res.cork(() => {
@@ -103,7 +102,7 @@ async function run(): Promise<void> {
                         })
                     }
                 } catch (err: any) {
-                    if (ABORTED) return
+                    if (res.aborted) return
 
                     res.cork(() => {
                         res.writeStatus("400")
@@ -128,18 +127,16 @@ async function run(): Promise<void> {
             })
             return
         }
-        const logId = LogId.newFromBase64(logIdBase64)
 
-        let ABORTED = false
         res.onAborted(() => {
-            ABORTED = true
+            res.aborted = true
         })
 
         /* Read the body until done or error */
         readPost(
             res,
             async (data: Uint8Array) => {
-                if (ABORTED) return
+                if (res.aborted) return
 
                 if (data.length > MAX_ENTRY_SIZE) {
                     res.cork(() => {
@@ -150,22 +147,17 @@ async function run(): Promise<void> {
                 }
 
                 try {
-                    const { entryNum, crc } = await server.appendLog(logId, data)
+                    const logId = LogId.newFromBase64(logIdBase64)
 
-                    if (ABORTED) return
+                    const entry = await server.appendLog(logId, data)
 
-                    if (crc === null) {
-                        res.cork(() => {
-                            res.writeStatus("404")
-                            res.end(JSON.stringify({ error: LOG_CREATE_ERROR }))
-                        })
-                    } else {
-                        res.cork(() => {
-                            res.end(JSON.stringify({ entryNum, crc }))
-                        })
-                    }
+                    if (res.aborted) return
+
+                    res.cork(() => {
+                        res.end(JSON.stringify({ entryNum: entry.entryNum, crc: entry.cksumNum }))
+                    })
                 } catch (err: any) {
-                    if (ABORTED) return
+                    if (res.aborted) return
 
                     res.cork(() => {
                         res.writeStatus("400")
@@ -185,8 +177,6 @@ async function run(): Promise<void> {
         const expectJSON = contentType.startsWith("application/json")
         const logIdBase64 = req.getParameter(0)
 
-        let ABORTED = false
-
         if (!logIdBase64 || logIdBase64.length !== 22) {
             res.cork(() => {
                 res.writeStatus("404")
@@ -194,15 +184,16 @@ async function run(): Promise<void> {
             })
             return
         }
-        const logId = LogId.newFromBase64(logIdBase64)
 
         res.onAborted(() => {
-            ABORTED = true
+            res.aborted = true
         })
         try {
+            const logId = LogId.newFromBase64(logIdBase64)
+
             const config = await server.getConfig(logId)
 
-            if (ABORTED) return
+            if (res.aborted) return
 
             if (config === null) {
                 res.cork(() => {
@@ -215,7 +206,7 @@ async function run(): Promise<void> {
                 })
             }
         } catch (err: any) {
-            if (ABORTED) return
+            if (res.aborted) return
 
             res.cork(() => {
                 res.writeStatus("400")
@@ -230,7 +221,45 @@ async function run(): Promise<void> {
         const expectJSON = contentType.startsWith("application/json")
         const logIdBase64 = req.getParameter(0)
 
-        let ABORTED = false
+        if (!logIdBase64 || logIdBase64.length !== 22) {
+            res.cork(() => {
+                res.writeStatus("404")
+                expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
+            })
+            return
+        }
+
+        res.onAborted(() => {
+            res.aborted = true
+        })
+        try {
+            const logId = LogId.newFromBase64(logIdBase64)
+
+            const entry = await server.getHead(logId)
+
+            if (res.aborted) return
+
+            res.cork(() => {
+                res.end(entry.u8())
+            })
+        } catch (err: any) {
+            if (res.aborted) return
+
+            res.cork(() => {
+                res.writeStatus("400")
+                expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
+            })
+        }
+    })
+
+    /* get list of entries from log */
+    logsrd.get("/log/:logid/entries", async (res, req) => {
+        let contentType = req.getHeader("content-type")
+        const expectJSON = contentType.startsWith("application/json")
+        const logIdBase64 = req.getParameter(0)
+        const offset = req.getQuery("offset")
+        const limit = req.getQuery("limit")
+        const entryNum = req.getQuery("entryNum")
 
         if (!logIdBase64 || logIdBase64.length !== 22) {
             res.cork(() => {
@@ -239,29 +268,22 @@ async function run(): Promise<void> {
             })
             return
         }
-        const logId = LogId.newFromBase64(logIdBase64)
 
         res.onAborted(() => {
-            ABORTED = true
+            res.aborted = true
         })
         try {
+            const logId = LogId.newFromBase64(logIdBase64)
+
             const entry = await server.getHead(logId)
 
-            if (ABORTED) return
+            if (res.aborted) return
 
             res.cork(() => {
-                if (entry.entry instanceof JSONLogEntry) {
-                    res.end(entry.entry.jsonU8())
-                } else if (entry.entry instanceof BinaryLogEntry) {
-                    res.end(entry.entry.u8)
-                } else if (entry.entry instanceof JSONCommandType) {
-                    res.end(entry.entry.commandValueU8)
-                } else {
-                    res.end(JSON.stringify({ error: INVALID_ENTRY_TYPE_ERROR }))
-                }
+                res.end(entry.u8())
             })
         } catch (err: any) {
-            if (ABORTED) return
+            if (res.aborted) return
 
             res.cork(() => {
                 res.writeStatus("400")

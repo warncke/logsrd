@@ -3,6 +3,10 @@ export default class LogEntry {
 
     constructor() {}
 
+    u8(): Uint8Array {
+        throw new Error("Not implemented")
+    }
+
     u8s(): Uint8Array[] {
         return []
     }

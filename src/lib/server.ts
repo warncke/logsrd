@@ -1,14 +1,10 @@
 import BinaryLogEntry from "./entry/binary-log-entry"
-import CreateLogCommand from "./entry/command/create-log-command"
-import SetConfigCommand from "./entry/command/set-config-command"
 import GlobalLogEntry from "./entry/global-log-entry"
 import JSONLogEntry from "./entry/json-log-entry"
-import LogEntry from "./entry/log-entry"
 import LogLogEntry from "./entry/log-log-entry"
 import LogConfig from "./log-config"
 import LogId from "./log-id"
 import Persist from "./persist"
-import GlobalLog from "./persist/persisted-log/global-log"
 
 export type ServerConfig = {
     host: string
@@ -23,7 +19,7 @@ export default class Server {
         this.persist = persist
     }
 
-    async appendLog(logId: LogId, data: Uint8Array): Promise<{ entryNum: number; crc: number }> {
+    async appendLog(logId: LogId, data: Uint8Array): Promise<GlobalLogEntry | LogLogEntry> {
         const config = await this.getConfig(logId)
         // TODO: add support for command entries
         let entry
@@ -41,10 +37,7 @@ export default class Server {
             throw new Error("cksum error")
         }
 
-        return {
-            crc: entry.cksumNum,
-            entryNum: entry.entryNum,
-        }
+        return entry
     }
 
     async createLog(config: any): Promise<LogConfig> {
