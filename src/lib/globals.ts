@@ -11,9 +11,12 @@ import LogLogCheckpoint from "./entry/log-log-checkpoint"
 import LogLogEntry from "./entry/log-log-entry"
 import LogId from "./log-id"
 import Persist from "./persist"
+import GlobalLogIOQueue from "./persist/io/global-log-io-queue"
+import IOQueue from "./persist/io/io-queue"
 import ReadConfigIOOperation from "./persist/io/read-config-io-operation"
 import ReadHeadIOOperation from "./persist/io/read-head-io-operation"
 import ReadRangeIOOperation from "./persist/io/read-range-io-operation"
+import GlobalLog from "./persist/persisted-log/global-log"
 
 /**
  * Maximum entry size of 32KB and maximum log size of 16MB are temporary limitations

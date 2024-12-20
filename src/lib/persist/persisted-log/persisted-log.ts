@@ -1,13 +1,21 @@
 import fs, { FileHandle } from "node:fs/promises"
 
-import { PersistLogArgs } from "../../globals"
+import { IOOperationType, PersistLogArgs, ReadIOOperation } from "../../globals"
 import LogConfig from "../../log-config"
 import Persist from "../../persist"
+import GlobalLogIOQueue from "../io/global-log-io-queue"
+import IOOperation from "../io/io-operation"
+import IOQueue from "../io/io-queue"
+import ReadConfigIOOperation from "../io/read-config-io-operation"
+import ReadHeadIOOperation from "../io/read-head-io-operation"
+import ReadRangeIOOperation from "../io/read-range-io-operation"
+import WriteIOOperation from "../io/write-io-operation"
 
 export default class PersistedLog {
     config: LogConfig
     logFile: string
     persist: Persist
+    ioQueue: GlobalLogIOQueue | IOQueue = new IOQueue()
     writeFH: FileHandle | null = null
     freeReadFhs: Array<FileHandle> = []
     maxReadFHs: number = 1
@@ -33,6 +41,28 @@ export default class PersistedLog {
         this.isColdLog = isColdLog
         this.isNewHotLog = isNewHotLog
         this.isOldHotLog = isOldHotLog
+    }
+
+    async blockIO(): Promise<void> {
+        if (this.ioBlocked) {
+            throw new Error("IO already blocked")
+        }
+        this.ioBlocked = true
+        if (this.ioInProgress !== null) {
+            await this.ioInProgress
+        }
+    }
+
+    unblockIO() {
+        if (!this.ioBlocked) {
+            throw new Error("IO not blocked")
+        }
+        this.ioBlocked = false
+        this.processOps()
+    }
+
+    async closeAllFHs(): Promise<void> {
+        await Promise.all([Promise.all(this.freeReadFhs.map((fh) => fh.close())), this.closeWriteFH()])
     }
 
     getReadFH(): FileHandle | null {
@@ -82,6 +112,105 @@ export default class PersistedLog {
             await this.writeFH.close()
             this.writeFH = null
         }
+    }
+
+    enqueueOp(op: IOOperation): void {
+        this.ioQueue.enqueue(op)
+
+        if (!this.ioBlocked && this.ioInProgress === null) {
+            this.processOps()
+        }
+    }
+
+    processOps() {
+        if (this.ioBlocked) {
+            return
+        }
+        if (this.ioInProgress !== null) {
+            return
+        }
+        this.ioInProgress = this.processOpsAsync().then(() => {
+            this.ioInProgress = null
+            if (this.ioQueue.opPending() && !this.ioBlocked) {
+                setTimeout(() => {
+                    this.processOps()
+                }, 0)
+            }
+        })
+    }
+
+    async processOpsAsync(): Promise<void> {
+        try {
+            if (!this.ioQueue.opPending()) {
+                return
+            }
+            const [readOps, writeOps] = this.ioQueue.getReady()
+            await Promise.all([this.processReadOps(readOps), this.processWriteOps(writeOps)])
+        } catch (err) {
+            console.error(err)
+        }
+    }
+
+    async processReadOps(ops: ReadIOOperation[]): Promise<void> {
+        return new Promise((resolve, reject) => {
+            try {
+                this._processReadOps(ops, resolve)
+            } catch (err) {
+                reject(err)
+            }
+        })
+    }
+
+    _processReadOps(ops: ReadIOOperation[], resolve: (value: void | PromiseLike<void>) => void): void {
+        while (ops.length > 0) {
+            let fh = this.getReadFH()
+            if (fh === null) {
+                break
+            }
+            const op = ops.shift()!
+            this._processReadOp(op, fh)
+                .then(() => this.doneReadFH(fh!))
+                .catch((err) => {
+                    op.completeWithError(err)
+                    if (fh !== null) this.closeReadFH(fh)
+                })
+        }
+        if (ops.length === 0) {
+            resolve()
+        } else {
+            setTimeout(() => {
+                this._processReadOps(ops, resolve)
+            }, 0)
+        }
+    }
+
+    async _processReadOp(op: ReadIOOperation, fh: FileHandle): Promise<void> {
+        switch (op.op) {
+            case IOOperationType.READ_HEAD:
+                return this._processReadHeadOp(op as ReadHeadIOOperation, fh)
+            case IOOperationType.READ_RANGE:
+                return this._processReadRangeOp(op as ReadRangeIOOperation, fh)
+            case IOOperationType.READ_CONFIG:
+                return this._processReadConfigOp(op as ReadConfigIOOperation, fh)
+            default:
+                throw new Error("unknown IO op")
+        }
+    }
+
+    async _processReadRangeOp(op: ReadRangeIOOperation, fh: FileHandle): Promise<void> {
+        throw new Error("not implemented")
+    }
+
+    async _processReadHeadOp(op: ReadHeadIOOperation, fh: FileHandle): Promise<void> {
+        throw new Error("not implemented")
+    }
+
+    async _processReadConfigOp(op: ReadConfigIOOperation, fh: FileHandle): Promise<void> {
+        throw new Error("not implemented")
+    }
+
+    async processWriteOps(ops: WriteIOOperation[]): Promise<void> {
+        throw new Error("not implemented")
     }
 
     /**

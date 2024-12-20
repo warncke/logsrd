@@ -1,11 +1,8 @@
 import fs, { FileHandle } from "node:fs/promises"
 
-import CreateLogCommand from "../../entry/command/create-log-command"
-import SetConfigCommand from "../../entry/command/set-config-command"
 import GlobalLogCheckpoint from "../../entry/global-log-checkpoint"
 import GlobalLogEntry from "../../entry/global-log-entry"
 import GlobalLogEntryFactory from "../../entry/global-log-entry-factory"
-import LogEntry from "../../entry/log-entry"
 import LogLogEntry from "../../entry/log-log-entry"
 import { GLOBAL_LOG_CHECKPOINT_INTERVAL, IOOperationType, PersistLogArgs, ReadIOOperation } from "../../globals"
 import LogId from "../../log-id"
@@ -35,89 +32,6 @@ export default class GlobalLog extends PersistedLog {
 
     constructor(args: PersistLogArgs) {
         super(args)
-    }
-
-    enqueueIOp(iOp: IOOperation): void {
-        this.ioQueue.enqueue(iOp)
-
-        if (!this.ioBlocked && this.ioInProgress === null) {
-            this.processIOps()
-        }
-    }
-
-    processIOps() {
-        if (this.ioBlocked) {
-            return
-        }
-        if (this.ioInProgress !== null) {
-            return
-        }
-        this.ioInProgress = this.processIOpsAsync().then(() => {
-            this.ioInProgress = null
-            if (this.ioQueue.opPending()) {
-                setTimeout(() => {
-                    this.processIOps()
-                }, 0)
-            }
-        })
-    }
-
-    async processIOpsAsync(): Promise<void> {
-        try {
-            if (!this.ioQueue.opPending()) {
-                return
-            }
-            const [readOps, writeOps] = this.ioQueue.getReady()
-            await Promise.all([this.processReads(readOps), this.processWrites(writeOps)])
-        } catch (err) {
-            console.error(err)
-        }
-    }
-
-    async processReads(ops: ReadIOOperation[]): Promise<void> {
-        return new Promise((resolve, reject) => {
-            try {
-                this._processReadOps(ops, resolve)
-            } catch (err) {
-                reject(err)
-            }
-        })
-    }
-
-    _processReadOps(ops: ReadIOOperation[], resolve: (value: void | PromiseLike<void>) => void): void {
-        while (ops.length > 0) {
-            let fh = this.getReadFH()
-            if (fh === null) {
-                break
-            }
-            const op = ops.shift()!
-            this._processReadOp(op, fh)
-                .then(() => this.doneReadFH(fh!))
-                .catch((err) => {
-                    op.completeWithError(err)
-                    if (fh !== null) this.closeReadFH(fh)
-                })
-        }
-        if (ops.length === 0) {
-            resolve()
-        } else {
-            setTimeout(() => {
-                this._processReadOps(ops, resolve)
-            }, 0)
-        }
-    }
-
-    async _processReadOp(op: ReadIOOperation, fh: FileHandle): Promise<void> {
-        switch (op.op) {
-            case IOOperationType.READ_HEAD:
-                return this._processReadHeadOp(op as ReadHeadIOOperation, fh)
-            case IOOperationType.READ_RANGE:
-                return this._processReadRangeOp(op as ReadRangeIOOperation, fh)
-            case IOOperationType.READ_CONFIG:
-                return this._processReadConfigOp(op as ReadConfigIOOperation, fh)
-            default:
-                throw new Error("unknown IO op")
-        }
     }
 
     async _processReadRangeOp(op: ReadRangeIOOperation, fh: FileHandle): Promise<void> {}
@@ -169,7 +83,7 @@ export default class GlobalLog extends PersistedLog {
         return [entry, bytesRead]
     }
 
-    async processWrites(ops: WriteIOOperation[]): Promise<void> {
+    async processWriteOps(ops: WriteIOOperation[]): Promise<void> {
         try {
             // build list of all buffers to write
             const u8s: Uint8Array[] = []

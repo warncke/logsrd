@@ -32,9 +32,14 @@ export default class PersistLog {
         this.logId = logId
     }
 
+    swapNewHotToOldHot() {
+        this.oldHotLogIndex = this.newHotLogIndex
+        this.newHotLogIndex = null
+    }
+
     async append(entry: LogEntry): Promise<GlobalLogEntry | LogLogEntry> {
         let op = new WriteIOOperation(entry, this.logId)
-        this.persist.newHotLog.enqueueIOp(op)
+        this.persist.newHotLog.enqueueOp(op)
         this.stats.addOp(op)
         op = await op.promise
         if (op.entry instanceof GlobalLogEntry || op.entry instanceof LogLogEntry) {
@@ -54,7 +59,7 @@ export default class PersistLog {
         this.creating = true
         const entry = new CreateLogCommand({ value: config })
         let op = new WriteIOOperation(entry, this.logId)
-        this.persist.newHotLog.enqueueIOp(op)
+        this.persist.newHotLog.enqueueOp(op)
         try {
             op = await op.promise
         } catch (err) {
@@ -89,11 +94,11 @@ export default class PersistLog {
         }
         let op = new ReadConfigIOOperation(this.logId)
         if (this.newHotLogIndex !== null && this.newHotLogIndex.hasConfig()) {
-            this.persist.newHotLog.enqueueIOp(op)
+            this.persist.newHotLog.enqueueOp(op)
         } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
-            this.persist.oldHotLog.enqueueIOp(op)
+            this.persist.oldHotLog.enqueueOp(op)
         } else if (this.coldLogIndex !== null && this.coldLogIndex.hasConfig()) {
-            this.persist.coldLog.enqueueIOp(op)
+            this.persist.coldLog.enqueueOp(op)
         } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
             throw new Error("Not implemented")
         } else {
@@ -141,11 +146,11 @@ export default class PersistLog {
     async getHead(): Promise<GlobalLogEntry | LogLogEntry> {
         let op = new ReadHeadIOOperation(this.logId)
         if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntries()) {
-            this.persist.newHotLog.enqueueIOp(op)
+            this.persist.newHotLog.enqueueOp(op)
         } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
-            this.persist.oldHotLog.enqueueIOp(op)
+            this.persist.oldHotLog.enqueueOp(op)
         } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntries()) {
-            this.persist.coldLog.enqueueIOp(op)
+            this.persist.coldLog.enqueueOp(op)
         } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
             throw new Error("Not implemented")
         } else {

@@ -44,6 +44,8 @@ async function run(): Promise<void> {
 
     const logsrd = uWS.App({})
 
+    /* Public Routes */
+
     logsrd.post("/log", (res, req) => createLog(server, res, req))
     logsrd.post("/log/:logid", (res, req) => appendLog(server, res, req))
     logsrd.get("/log/:logid/config", (res, req) => getConfig(server, res, req))
@@ -62,6 +64,7 @@ async function run(): Promise<void> {
      *
      * These are used for testing and should be disabled or secured in production
      */
+    logsrd.get("/admin/truncate-hot-log", (res, req) => adminTruncateHotLog(server, res, req))
 
     /* Unhandled Routes */
     logsrd.get("/*", (res) => {
@@ -376,3 +379,45 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
         })
     }
 }
+
+async function adminTruncateHotLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
+    res.onAborted(() => {
+        res.aborted = true
+    })
+    try {
+        await server.persist.truncateHotLog()
+
+        if (res.aborted) return
+
+        res.cork(() => {
+            res.end("done")
+        })
+    } catch (err: any) {
+        if (res.aborted) return
+
+        res.cork(() => {
+            res.writeStatus("400")
+            res.end(err.message)
+        })
+    }
+}
+
+// async function adminTruncateHotLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
+//     res.onAborted(() => {
+//         res.aborted = true
+//     })
+//     try {
+//         if (res.aborted) return
+
+//         res.cork(() => {
+//             res.end("done")
+//         })
+//     } catch (err: any) {
+//         if (res.aborted) return
+
+//         res.cork(() => {
+//             res.writeStatus("400")
+//             res.end(err.message)
+//         })
+//     }
+// }

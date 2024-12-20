@@ -1,3 +1,4 @@
+import fs from "node:fs/promises"
 import path from "path"
 
 import LogConfig from "./log-config"
@@ -175,5 +176,56 @@ export default class Persist {
         await this.coldLog.init()
         await this.oldHotLog.init()
         await this.newHotLog.init()
+    }
+
+    async truncateHotLog(): Promise<void> {
+        let stat = null
+        try {
+            stat = await fs.stat(this.oldHotLog.logFile)
+        } catch (_err) {
+            // file should not exist
+        }
+        if (stat !== null) {
+            throw new Error("old hot log should not exist")
+        }
+        // block IO and wait till all in progress ops complete
+        await this.newHotLog.blockIO()
+        await this.newHotLog.closeAllFHs()
+        // move new to old hot log file
+        await fs.rename(this.newHotLog.logFile, this.oldHotLog.logFile)
+        const newHotLog = new HotLog({
+            config: this.newHotLog.config,
+            logFile: this.newHotLog.logFile,
+            persist: this,
+            isNewHotLog: true,
+        })
+        // swap newHotLog to oldHotLog
+        this.newHotLog.logFile = this.oldHotLog.logFile
+        this.newHotLog.isNewHotLog = false
+        this.newHotLog.isOldHotLog = true
+        this.oldHotLog = this.newHotLog
+        this.newHotLog = newHotLog
+        // drain pending ops from oldHotLog
+        const oldReadOps = []
+        while (this.oldHotLog.ioQueue.opPending()) {
+            const [reads, writes] = this.oldHotLog.ioQueue.getReady()
+            for (const op of reads) {
+                oldReadOps.push(op)
+            }
+            // writes go to newHotLog
+            for (const op of writes) {
+                this.newHotLog.ioQueue.enqueue(op)
+            }
+        }
+        // reads stay on oldHotLog
+        for (const op of oldReadOps) {
+            this.oldHotLog.ioQueue.enqueue(op)
+        }
+        // for all open logs the newHotLogIndex is now the oldHotLogIndex
+        for (const log of this.logs.values()) {
+            log.swapNewHotToOldHot()
+        }
+        // unblock IO
+        await this.oldHotLog.unblockIO()
     }
 }
