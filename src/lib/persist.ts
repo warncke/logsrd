@@ -254,5 +254,8 @@ export default class Persist {
         }
         // unblock IO
         await this.oldHotLog.unblockIO()
+        // start processing
+        this.oldHotLog.processOps()
+        this.newHotLog.processOps()
     }
 }
