@@ -278,7 +278,9 @@ async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
 
         res.cork(() => {
             res.writeStatus("400")
-            expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
+            expectJSON
+                ? res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                : res.end(`${err.message} ${err.stack}`)
         })
     }
 }
@@ -314,7 +316,9 @@ async function getHead(server: Server, res: uWS.HttpResponse, req: uWS.HttpReque
 
         res.cork(() => {
             res.writeStatus("400")
-            expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
+            expectJSON
+                ? res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                : res.end(`${err.message} ${err.stack}`)
         })
     }
 }
@@ -325,7 +329,8 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
     const logIdBase64 = req.getParameter(0)
     const offset = req.getQuery("offset")
     const limit = req.getQuery("limit")
-    const entryNum = req.getQuery("entryNum")
+    const entryNums = req.getQuery("entryNums")
+    const meta = req.getQuery("meta") === "true" ? true : false
 
     if (!logIdBase64 || logIdBase64.length !== 22) {
         res.cork(() => {
@@ -342,16 +347,26 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
         const logId = LogId.newFromBase64(logIdBase64)
         // TODO: this should be streaming instead of buffering everything
         const config = await server.getConfig(logId)
-        const entries = await server.getEntries(logId, entryNum, offset, limit)
+        const entries = await server.getEntries(logId, entryNums, offset, limit)
 
         if (res.aborted) return
 
         if (config.type === "json") {
             res.cork(() => {
+                res.writeHeader("Content-Type", "application/json")
                 res.write("[")
-                for (const entry of entries) {
-                    res.write(entry.u8())
-                    res.write(",")
+                for (let i = 0; i < entries.length; i++) {
+                    const entry = entries[i]
+                    if (meta) {
+                        res.write(`{"entryNum":${entry.entryNum},"crc":${entry.cksumNum},"entry":`)
+                        res.write(entry.u8())
+                        res.write("}")
+                    } else {
+                        res.write(entry.u8())
+                    }
+                    if (i < entries.length - 1) {
+                        res.write(",")
+                    }
                 }
                 res.end("]")
             })
@@ -376,7 +391,9 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
 
         res.cork(() => {
             res.writeStatus("400")
-            expectJSON ? res.end(JSON.stringify({ error: err.message, stack: err.stack })) : res.end(err.message)
+            expectJSON
+                ? res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                : res.end(`${err.message} ${err.stack}`)
         })
     }
 }
@@ -398,7 +415,7 @@ async function adminMoveNewToOldHotLog(server: Server, res: uWS.HttpResponse, re
 
         res.cork(() => {
             res.writeStatus("400")
-            res.end(err.message)
+            res.end(`${err.message} ${err.stack}`)
         })
     }
 }
@@ -420,7 +437,7 @@ async function adminEmptyOldHotLog(server: Server, res: uWS.HttpResponse, req: u
 
         res.cork(() => {
             res.writeStatus("400")
-            res.end(err.message)
+            res.end(`${err.message} ${err.stack}`)
         })
     }
 }
@@ -440,7 +457,7 @@ async function adminEmptyOldHotLog(server: Server, res: uWS.HttpResponse, req: u
 
 //         res.cork(() => {
 //             res.writeStatus("400")
-//             res.end(err.message)
+//             res.end(`${err.message} ${err.stack}`)
 //         })
 //     }
 // }

@@ -60,25 +60,43 @@ export default class Server {
 
     async getEntries(
         logId: LogId,
-        entryNum: string | undefined,
-        offset: string | undefined,
-        limit: string | undefined,
+        entryNums: string | number[] | undefined,
+        offset: string | number | undefined,
+        limit: string | number | undefined,
     ): Promise<Array<GlobalLogEntry | LogLogEntry>> {
-        if (typeof entryNum === "string" && entryNum.length > 0) {
-            const entryNums = entryNum
+        if (typeof entryNums === "string" && entryNums.length > 0) {
+            entryNums = entryNums
                 .split(",")
-                .map(parseInt)
+                .map((n) => parseInt(n))
                 .filter((entryNum) => entryNum >= 0)
-            if (entryNums.length === 0) {
+            if (entryNums!.length === 0) {
                 throw new Error("invalid entryNum")
             }
-            if (entryNum.length > MAX_RESPONSE_ENTRIES) {
+            if (entryNums!.length > MAX_RESPONSE_ENTRIES) {
                 throw new Error(`Maximum number of entries is ${MAX_RESPONSE_ENTRIES}`)
             }
-            let entries = await this.persist.getLog(logId).getEntries(entryNums)
-            return entries
+            return this.persist.getLog(logId).getEntryNums(entryNums)
         } else {
-            throw new Error("not implemented")
+            if (typeof offset === "string" && offset.length > 0) {
+                offset = parseInt(offset)
+                if (!(offset >= 0)) {
+                    throw new Error("invalid offset")
+                }
+            } else {
+                offset = 0
+            }
+            if (typeof limit === "string" && limit.length > 0) {
+                limit = parseInt(limit)
+                if (!(limit >= 0)) {
+                    throw new Error("invalid limit")
+                }
+                if (limit > MAX_RESPONSE_ENTRIES) {
+                    throw new Error(`Maximum number of entries is ${MAX_RESPONSE_ENTRIES}`)
+                }
+            } else {
+                limit = MAX_RESPONSE_ENTRIES
+            }
+            return this.persist.getLog(logId).getEntries(offset, limit)
         }
     }
 

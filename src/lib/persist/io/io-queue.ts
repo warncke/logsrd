@@ -82,7 +82,7 @@ export default class IOQueue {
     }
 
     combineReadHeadOps(ops: ReadHeadIOOperation[]): ReadHeadIOOperation {
-        const op = new ReadHeadIOOperation(ops[0].logId!)
+        const op = new ReadHeadIOOperation(ops[0].logId!, ops[0].index)
         op.reject = (err) => {
             for (const op of ops) {
                 op.completeWithError(err)

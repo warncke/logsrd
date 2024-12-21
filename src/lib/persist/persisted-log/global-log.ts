@@ -15,7 +15,6 @@ import WriteIOOperation from "../io/write-io-operation"
 import PersistedLog from "./persisted-log"
 
 type LogOp = {
-    entryNum: number
     offset: number
     op: WriteIOOperation
     entry: GlobalLogEntry | LogLogEntry
@@ -47,25 +46,19 @@ export default class GlobalLog extends PersistedLog {
         this.logFile = logFile
     }
 
-    async _processReadRangeOp(op: ReadRangeIOOperation, fh: FileHandle): Promise<void> {}
-
-    async _processReadHeadOp(op: ReadHeadIOOperation, fh: FileHandle): Promise<void> {
-        const log = this.persist.getLog(op.logId!)
-        const [entry, bytesRead] = await this._processReadGlobalLogEntry(fh, op.logId!, ...log.getLastGlobalEntry())
-        op.entry = entry
-        op.bytesRead = bytesRead
-        op.complete(op)
+    logName(): string {
+        if (this.isColdLog) {
+            return "cold"
+        } else if (this.isOldHotLog) {
+            return "oldHot"
+        } else if (this.isNewHotLog) {
+            return "newHot"
+        } else {
+            return "global"
+        }
     }
 
-    async _processReadConfigOp(op: ReadConfigIOOperation, fh: FileHandle): Promise<void> {
-        const log = this.persist.getLog(op.logId!)
-        const [entry, bytesRead] = await this._processReadGlobalLogEntry(fh, op.logId!, ...log.getLastGlobalConfig())
-        op.entry = entry
-        op.bytesRead = bytesRead
-        op.complete(op)
-    }
-
-    async _processReadGlobalLogEntry(
+    async _processReadLogEntry(
         fh: FileHandle,
         logId: LogId,
         entryNum: number,
@@ -76,21 +69,23 @@ export default class GlobalLog extends PersistedLog {
         const { bytesRead } = await fh.read({ buffer: u8, position: offset, length })
         if (bytesRead !== length) {
             throw new Error(
-                `bytesRead error entryNum=${entryNum} offset=${offset} length=${length} bytesRead=${bytesRead}`,
+                `bytesRead error log=${this.logName()} entryNum=${entryNum} offset=${offset} length=${length} bytesRead=${bytesRead}`,
             )
         }
         const entry = GlobalLogEntryFactory.fromU8(u8)
         if (entry.logId.base64() !== logId.base64()) {
             throw new Error(
-                `logId mismatch logId=${logId.base64()} entry.logId=${entry.logId.base64()} entryNum=${entryNum} offset=${offset} length=${length}`,
+                `logId mismatch log=${this.logName()} logId=${logId.base64()} entry.logId=${entry.logId.base64()} entryNum=${entryNum} offset=${offset} length=${length}`,
             )
         }
         if (!entry.verify()) {
-            throw new Error(`crc verify error entryNum=${entryNum} offset=${offset} length=${length}`)
+            throw new Error(
+                `crc verify error log=${this.logName()} entryNum=${entryNum} offset=${offset} length=${length}`,
+            )
         }
         if (entry.entryNum !== entryNum) {
             throw new Error(
-                `entryNum mismatch entryNum=${entryNum} entry.entryNum=${entry.entryNum} offset=${offset} length=${length}`,
+                `entryNum mismatch log=${this.logName()} entryNum=${entryNum} entry.entryNum=${entry.entryNum} offset=${offset} length=${length}`,
             )
         }
         return [entry, bytesRead]
@@ -120,7 +115,7 @@ export default class GlobalLog extends PersistedLog {
                 if (op.logId === null) {
                     // global logs are ephemeral so they do not have a real entryNum
                     logEntry = new LogLogEntry({ entry: op.entry, entryNum: 0 })
-                    globalOps.push({ entryNum: 0, offset: entryOffset, op: op, entry: logEntry })
+                    globalOps.push({ offset: entryOffset, op: op, entry: logEntry })
                 }
                 // this is a log entry for a log log
                 else {
@@ -134,15 +129,16 @@ export default class GlobalLog extends PersistedLog {
                         })
                     }
                     logOpInfo = logOps.get(logIdBase64)!
-                    logOpInfo.maxEntryNum += 1
+                    if (op.entryNum === null) {
+                        op.entryNum = logOpInfo.maxEntryNum += 1
+                    }
                     logEntry = new GlobalLogEntry({
                         logId: op.logId,
-                        entryNum: logOpInfo.maxEntryNum,
+                        entryNum: op.entryNum,
                         entry: op.entry,
                     })
                     // and entry to local index which will be merged to global index after write completes
                     logOpInfo.ops.push({
-                        entryNum: logOpInfo.maxEntryNum,
                         offset: entryOffset,
                         op: op,
                         entry: logEntry,
@@ -202,11 +198,15 @@ export default class GlobalLog extends PersistedLog {
                 this.byteLength += ret.bytesWritten
             } else {
                 try {
-                    await this.truncate(this.byteLength)
+                    if (ret.bytesWritten > 0) {
+                        await this.truncate(this.byteLength)
+                    }
                 } catch (err) {
                     // we are in a corrupted state here but still need this to be correct
                     this.byteLength += ret.bytesWritten
-                    throw new Error(`Failed to write all bytes. Expected: ${writeBytes} Actual: ${ret.bytesWritten}`)
+                    throw new Error(
+                        `Failed to write all bytes. log=${this.logName()} expected=${writeBytes} actual=${ret.bytesWritten}`,
+                    )
                 }
             }
 
@@ -220,9 +220,7 @@ export default class GlobalLog extends PersistedLog {
                 const log = this.persist.getLog(opInfo.logId)
                 for (const op of opInfo.ops) {
                     op.op.bytesWritten = op.entry.byteLength()
-                    // global log writes always go to hot log
-                    log.addNewHotLogEntry(op.op.entry, op.entryNum, op.offset, op.entry.byteLength())
-                    // set the entry for the op to the created log entry
+                    this.addEntryToIndex(op.entry as GlobalLogEntry, op.offset)
                     op.op.entry = op.entry
                     // resolves promise for op
                     op.op.complete(op.op)
@@ -247,6 +245,10 @@ export default class GlobalLog extends PersistedLog {
             // TODO: error handling
             console.error("cksum verification failed", entry)
         }
+        this.addEntryToIndex(entry, entryOffset)
+    }
+
+    addEntryToIndex(entry: GlobalLogEntry, entryOffset: number): void {
         const persistLog = this.persist.getLog(entry.logId)
         if (this.isNewHotLog) {
             persistLog.addNewHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())

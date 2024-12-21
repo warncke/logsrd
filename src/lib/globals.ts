@@ -14,6 +14,7 @@ import Persist from "./persist"
 import GlobalLogIOQueue from "./persist/io/global-log-io-queue"
 import IOQueue from "./persist/io/io-queue"
 import ReadConfigIOOperation from "./persist/io/read-config-io-operation"
+import ReadEntriesIOOperation from "./persist/io/read-entries-io-operation"
 import ReadHeadIOOperation from "./persist/io/read-head-io-operation"
 import ReadRangeIOOperation from "./persist/io/read-range-io-operation"
 import GlobalLog from "./persist/persisted-log/global-log"
@@ -110,7 +111,11 @@ export enum IOOperationType {
     WRITE,
 }
 
-export type ReadIOOperation = ReadConfigIOOperation | ReadHeadIOOperation | ReadRangeIOOperation
+export type ReadIOOperation =
+    | ReadConfigIOOperation
+    | ReadHeadIOOperation
+    | ReadRangeIOOperation
+    | ReadEntriesIOOperation
 
 /**
  * Error thrown by log writer if a write was aborted.

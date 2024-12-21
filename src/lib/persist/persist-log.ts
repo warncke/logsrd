@@ -15,6 +15,7 @@ import ReadConfigIOOperation from "./io/read-config-io-operation"
 import ReadEntriesIOOperation from "./io/read-entries-io-operation"
 import ReadHeadIOOperation from "./io/read-head-io-operation"
 import WriteIOOperation from "./io/write-io-operation"
+import LogIndex from "./log-index"
 import LogLogIndex from "./log-log-index"
 import PersistLogStats from "./persist-log-stats"
 import LogLog from "./persisted-log/log-log"
@@ -49,16 +50,32 @@ export default class PersistLog {
         return this.logLog
     }
 
-    async appendOp(target: PersistedLog, entry: LogEntry): Promise<WriteIOOperation> {
-        let op = new WriteIOOperation(entry, this.logId)
+    async appendOp(target: PersistedLog, entry: LogEntry, entryNum: number | null = null): Promise<WriteIOOperation> {
+        let op = new WriteIOOperation(entry, entryNum, this.logId)
         target.enqueueOp(op)
         op = await op.promise
         this.stats.addOp(op)
         return op
     }
 
-    async readEntriesOp(target: PersistedLog, entryNums: number[]): Promise<ReadEntriesIOOperation> {
-        let op = new ReadEntriesIOOperation(this.logId, entryNums)
+    async readEntriesOp(target: PersistedLog, index: LogIndex, entryNums: number[]): Promise<ReadEntriesIOOperation> {
+        let op = new ReadEntriesIOOperation(this.logId, index, entryNums)
+        target.enqueueOp(op)
+        op = await op.promise
+        this.stats.addOp(op)
+        return op
+    }
+
+    async readConfigOp(target: PersistedLog, index: LogIndex): Promise<ReadConfigIOOperation> {
+        let op = new ReadConfigIOOperation(this.logId, index)
+        target.enqueueOp(op)
+        op = await op.promise
+        this.stats.addOp(op)
+        return op
+    }
+
+    async readHeadOp(target: PersistedLog, index: LogIndex): Promise<ReadHeadIOOperation> {
+        let op = new ReadHeadIOOperation(this.logId, index)
         target.enqueueOp(op)
         op = await op.promise
         this.stats.addOp(op)
@@ -101,33 +118,36 @@ export default class PersistLog {
             return
         }
         // TODO: make this incremental if there are a large number of entries
-        const op = await this.readEntriesOp(this.persist.oldHotLog, moveEntries)
+        const op = await this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex, moveEntries)
         if (op.entries === null) {
             throw new Error("entries is null")
         }
         // if there is at least pageSize of entries move to log log
-        if (entryByteLength > this.persist.config.pageSize) {
-            const ops = []
-            for (const entry of op.entries) {
-                ops.push(this.appendOp(this.logLog!, entry.entry))
-            }
+        const moveToLogLog = entryByteLength > this.persist.config.pageSize
+        if (moveToLogLog) {
+            const ops = op.entries.map((entry) => this.appendOp(this.logLog!, entry.entry, entry.entryNum))
             await Promise.all(ops)
         }
         // otherwise move to cold log
         else {
-            const ops = []
-            for (const entry of op.entries) {
-                ops.push(this.appendOp(this.persist.coldLog, entry.entry))
-            }
+            const ops = op.entries.map((entry) => this.appendOp(this.persist.coldLog, entry.entry, entry.entryNum))
             await Promise.all(ops)
         }
         // get/delete any current ops queued for old hot log
         const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
+        // reassign ops to correct log
         if (logQueue !== null) {
             while (logQueue.opPending()) {
                 const [reads] = logQueue.getReady()
-                for (const read of reads) {
-                    this.logLog!.enqueueOp(read)
+                for (const op of reads) {
+                    if (moveToLogLog) {
+                        // reassign index for op - TODO: fix type hack
+                        ;(op as ReadHeadIOOperation).index = this.logLogIndex!
+                        this.logLog!.enqueueOp(op)
+                    } else {
+                        ;(op as ReadHeadIOOperation).index = this.coldLogIndex!
+                        this.persist.coldLog.enqueueOp(op)
+                    }
                 }
             }
         }
@@ -185,20 +205,7 @@ export default class PersistLog {
         if (this.config !== null) {
             return this.config
         }
-        let op = new ReadConfigIOOperation(this.logId)
-        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasConfig()) {
-            this.persist.newHotLog.enqueueOp(op)
-        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
-            this.persist.oldHotLog.enqueueOp(op)
-        } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
-            this.persist.coldLog.enqueueOp(op)
-        } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
-            throw new Error("Not implemented")
-        } else {
-            throw new Error("Not implemented")
-        }
-        op = await op.promise
-        this.stats.addOp(op)
+        const op = await this.readConfigOp(...this.readConfigTargetIndex())
         if (op.entry === null) {
             throw new Error("entry is null")
         }
@@ -210,29 +217,37 @@ export default class PersistLog {
         return this.config
     }
 
-    getLastGlobalConfig(): [number, number, number] {
-        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasConfig()) {
-            return this.newHotLogIndex.lastConfig()
-        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
-            return this.oldHotLogIndex.lastConfig()
-        } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
-            return this.logLogIndex.lastConfig()
-        } else {
-            // when compacting need to make sure there are no outstanding read ops
-            throw new Error("No global config")
+    readConfigTargetIndex(): [PersistedLog, LogIndex] {
+        // indexes should not have duplicates but make sure this is correct even if they do
+        let logLogConfigEntryNum: number | null = null
+        if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
+            ;[logLogConfigEntryNum] = this.logLogIndex.lastConfig()
         }
-    }
-
-    getLastGlobalEntry(): [number, number, number] {
-        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntries()) {
-            return this.newHotLogIndex.lastEntry()
-        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
-            return this.oldHotLogIndex.lastEntry()
-        } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
-            return this.logLogIndex.lastEntry()
+        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasConfig()) {
+            const [configEntryNum] = this.newHotLogIndex.lastConfig()
+            if (logLogConfigEntryNum !== null && logLogConfigEntryNum >= configEntryNum) {
+                return [this.logLog!, this.logLogIndex!]
+            } else {
+                return [this.persist.newHotLog, this.newHotLogIndex]
+            }
+        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
+            const [configEntryNum] = this.oldHotLogIndex.lastConfig()
+            if (logLogConfigEntryNum !== null && logLogConfigEntryNum >= configEntryNum) {
+                return [this.logLog!, this.logLogIndex!]
+            } else {
+                return [this.persist.oldHotLog, this.oldHotLogIndex]
+            }
+        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasConfig()) {
+            const [configEntryNum] = this.coldLogIndex.lastConfig()
+            if (logLogConfigEntryNum !== null && logLogConfigEntryNum >= configEntryNum) {
+                return [this.logLog!, this.logLogIndex!]
+            } else {
+                return [this.persist.coldLog, this.coldLogIndex]
+            }
+        } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
+            return [this.logLog!, this.logLogIndex]
         } else {
-            // when compacting need to make sure there are no outstanding read ops
-            throw new Error("No global entries")
+            throw new Error("No config found")
         }
     }
 
@@ -245,32 +260,158 @@ export default class PersistLog {
     }
 
     async getHead(): Promise<GlobalLogEntry | LogLogEntry> {
-        let op = new ReadHeadIOOperation(this.logId)
-        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntries()) {
-            this.persist.newHotLog.enqueueOp(op)
-        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
-            this.persist.oldHotLog.enqueueOp(op)
-        } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
-            this.persist.coldLog.enqueueOp(op)
-        } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
-            throw new Error("Not implemented")
-        } else {
-            throw new Error("Not implemented")
-        }
-        op = await op.promise
-        this.stats.addOp(op)
+        const op = await this.readHeadOp(...this.readHeadTargetIndex())
         if (op.entry === null) {
             throw new Error("entry is null")
         }
         return op.entry
     }
 
-    async getEntries(
-        entryNums: number[],
-        offset?: number,
-        limit?: number,
-    ): Promise<Array<GlobalLogEntry | LogLogEntry>> {
-        return []
+    readHeadTargetIndex(): [PersistedLog, LogIndex] {
+        // indexes should not have duplicates but make sure this is correct even if they do
+        let logLogHeadEntryNum: number | null = null
+        if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
+            ;[logLogHeadEntryNum] = this.logLogIndex.lastEntry()
+        }
+        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntries()) {
+            const [headEntryNum] = this.newHotLogIndex.lastEntry()
+            if (logLogHeadEntryNum !== null && logLogHeadEntryNum >= headEntryNum) {
+                return [this.logLog!, this.logLogIndex!]
+            } else {
+                return [this.persist.newHotLog, this.newHotLogIndex]
+            }
+        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
+            const [headEntryNum] = this.oldHotLogIndex.lastEntry()
+            if (logLogHeadEntryNum !== null && logLogHeadEntryNum >= headEntryNum) {
+                return [this.logLog!, this.logLogIndex!]
+            } else {
+                return [this.persist.oldHotLog, this.oldHotLogIndex]
+            }
+        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntries()) {
+            const [headEntryNum] = this.coldLogIndex.lastEntry()
+            if (logLogHeadEntryNum !== null && logLogHeadEntryNum >= headEntryNum) {
+                return [this.logLog!, this.logLogIndex!]
+            } else {
+                return [this.persist.coldLog, this.coldLogIndex]
+            }
+        } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
+            return [this.logLog!, this.logLogIndex]
+        } else {
+            throw new Error("No config found")
+        }
+    }
+
+    async getEntryNums(entryNums: number[]): Promise<Array<GlobalLogEntry | LogLogEntry>> {
+        // entryNums are not necessarily in order so map entry nums to original index
+        // so that they can be sorted and read in order which is more efficient
+        const entryNumIndexes = entryNums.map((entryNum, index) => [entryNum, index]).sort((a, b) => a[0] - b[0])
+        // entryNums may be spread across different logs files
+        const logLogEntries = []
+        const coldLogEntries = []
+        const oldHotLogEntries = []
+        const newHotLogEntries = []
+        // assign each entry to log it should be read from
+        for (let i = 0; i < entryNumIndexes.length; i++) {
+            const [entryNum] = entryNumIndexes[i]
+            if (this.logLogIndex !== null && this.logLogIndex.hasEntry(entryNum)) {
+                logLogEntries.push(entryNum)
+            } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntry(entryNum)) {
+                coldLogEntries.push(entryNum)
+            } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntry(entryNum)) {
+                oldHotLogEntries.push(entryNum)
+            } else if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntry(entryNum)) {
+                newHotLogEntries.push(entryNum)
+            } else {
+                throw new Error(`entryNum ${entryNum} not found`)
+            }
+        }
+        // perform read ops on each log that has entries
+        let ops = []
+        if (logLogEntries.length > 0) {
+            ops.push(this.readEntriesOp(this.logLog!, this.logLogIndex!, logLogEntries))
+        }
+        if (coldLogEntries.length > 0) {
+            ops.push(this.readEntriesOp(this.persist.coldLog, this.coldLogIndex!, coldLogEntries))
+        }
+        if (oldHotLogEntries.length > 0) {
+            ops.push(this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex!, oldHotLogEntries))
+        }
+        if (newHotLogEntries.length > 0) {
+            ops.push(this.readEntriesOp(this.persist.newHotLog, this.newHotLogIndex!, newHotLogEntries))
+        }
+        // wait for all ops to complete
+        const results = await Promise.all(ops)
+        // combine all entries into array - because of the order of ops and the write flow
+        // between logs they will still be sorted by entryNum
+        const entries = results
+            .map((result) => {
+                if (result.entries === null) {
+                    throw new Error("entries is null")
+                }
+                return result.entries
+            })
+            .flat()
+        // return entries to requested order
+        const ret = Array(entryNums.length)
+        for (let i = 0; i < entryNumIndexes.length; i++) {
+            const [_, index] = entryNumIndexes[i]
+            ret[index] = entries[i]
+        }
+        return ret
+    }
+
+    async getEntries(offset: number, limit: number): Promise<Array<GlobalLogEntry | LogLogEntry>> {
+        // entryNums may be spread across different logs files
+        const logLogEntries = []
+        const coldLogEntries = []
+        const oldHotLogEntries = []
+        const newHotLogEntries = []
+        // perform read ops on each log that has entries
+        // TODO: optimize this
+        for (let i = 0; i < limit; i++) {
+            const entryNum = offset + i
+            if (this.logLogIndex !== null && this.logLogIndex.hasEntry(entryNum)) {
+                logLogEntries.push(entryNum)
+            } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntry(entryNum)) {
+                coldLogEntries.push(entryNum)
+            } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntry(entryNum)) {
+                oldHotLogEntries.push(entryNum)
+            } else if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntry(entryNum)) {
+                newHotLogEntries.push(entryNum)
+            } else {
+                if (i === 0) {
+                    throw new Error(`entryNum ${entryNum} not found`)
+                } else {
+                    break
+                }
+            }
+        }
+        // perform read ops on each log that has entries
+        let ops = []
+        if (logLogEntries.length > 0) {
+            ops.push(this.readEntriesOp(this.logLog!, this.logLogIndex!, logLogEntries))
+        }
+        if (coldLogEntries.length > 0) {
+            ops.push(this.readEntriesOp(this.persist.coldLog, this.coldLogIndex!, coldLogEntries))
+        }
+        if (oldHotLogEntries.length > 0) {
+            ops.push(this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex!, oldHotLogEntries))
+        }
+        if (newHotLogEntries.length > 0) {
+            ops.push(this.readEntriesOp(this.persist.newHotLog, this.newHotLogIndex!, newHotLogEntries))
+        }
+        // wait for all ops to complete
+        const results = await Promise.all(ops)
+        // combine all entries into array - because of the order of ops and the write flow
+        // between logs they will still be sorted by entryNum
+        return results
+            .map((result) => {
+                if (result.entries === null) {
+                    throw new Error("entries is null")
+                }
+                return result.entries
+            })
+            .flat()
     }
 
     maxEntryNum(): number {
@@ -303,10 +444,10 @@ export default class PersistLog {
     }
 
     addColdLogEntry(entry: LogEntry, entryNum: number, entryOffset: number, length: number) {
-        if (this.logLogIndex === null) {
-            this.logLogIndex = new GlobalLogIndex()
+        if (this.coldLogIndex === null) {
+            this.coldLogIndex = new GlobalLogIndex()
         }
-        this.logLogIndex.addEntry(entry, entryNum, entryOffset, length)
+        this.coldLogIndex.addEntry(entry, entryNum, entryOffset, length)
     }
 
     addLogLogEntry(entry: LogEntry, entryNum: number, entryOffset: number, length: number) {

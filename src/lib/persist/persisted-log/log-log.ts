@@ -45,7 +45,10 @@ export default class LogLog extends PersistedLog {
             for (const op of ops) {
                 // offset of entry from length of file + bytes written in current write
                 const entryOffset = this.byteLength + writeBytes
-                const entry = new LogLogEntry({ entry: op.entry, entryNum: (maxEntryNum += 1) })
+                if (op.entryNum === null) {
+                    op.entryNum = maxEntryNum += 1
+                }
+                const entry = new LogLogEntry({ entry: op.entry, entryNum: op.entryNum })
                 opInfo.push({
                     entry,
                     offset: entryOffset,

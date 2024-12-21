@@ -7,11 +7,13 @@ import LogLogEntry from "../../entry/log-log-entry"
 import LogLogEntryFactory from "../../entry/log-log-entry-factory"
 import { IOOperationType, PersistLogArgs, ReadIOOperation } from "../../globals"
 import LogConfig from "../../log-config"
+import LogId from "../../log-id"
 import Persist from "../../persist"
 import GlobalLogIOQueue from "../io/global-log-io-queue"
 import IOOperation from "../io/io-operation"
 import IOQueue from "../io/io-queue"
 import ReadConfigIOOperation from "../io/read-config-io-operation"
+import ReadEntriesIOOperation from "../io/read-entries-io-operation"
 import ReadHeadIOOperation from "../io/read-head-io-operation"
 import ReadRangeIOOperation from "../io/read-range-io-operation"
 import WriteIOOperation from "../io/write-io-operation"
@@ -191,6 +193,8 @@ export default class PersistedLog {
         switch (op.op) {
             case IOOperationType.READ_HEAD:
                 return this._processReadHeadOp(op as ReadHeadIOOperation, fh)
+            case IOOperationType.READ_ENTRIES:
+                return this._processReadEntriesOp(op as ReadEntriesIOOperation, fh)
             case IOOperationType.READ_RANGE:
                 return this._processReadRangeOp(op as ReadRangeIOOperation, fh)
             case IOOperationType.READ_CONFIG:
@@ -200,15 +204,44 @@ export default class PersistedLog {
         }
     }
 
+    async _processReadEntriesOp(op: ReadEntriesIOOperation, fh: FileHandle): Promise<void> {
+        // TODO: combine adjacent reads
+        const entryReads = await Promise.all(
+            op.entryNums.map((entryNum) => this._processReadLogEntry(fh, op.logId!, ...op.index.entry(entryNum))),
+        )
+        op.entries = []
+        for (const [entry, bytesRead] of entryReads) {
+            op.bytesRead += bytesRead
+            op.entries.push(entry)
+        }
+        op.complete(op)
+    }
+
     async _processReadRangeOp(op: ReadRangeIOOperation, fh: FileHandle): Promise<void> {
         throw new Error("not implemented")
     }
 
     async _processReadHeadOp(op: ReadHeadIOOperation, fh: FileHandle): Promise<void> {
-        throw new Error("not implemented")
+        const [entry, bytesRead] = await this._processReadLogEntry(fh, op.logId!, ...op.index.lastEntry())
+        op.entry = entry
+        op.bytesRead = bytesRead
+        op.complete(op)
     }
 
     async _processReadConfigOp(op: ReadConfigIOOperation, fh: FileHandle): Promise<void> {
+        const [entry, bytesRead] = await this._processReadLogEntry(fh, op.logId!, ...op.index.lastConfig())
+        op.entry = entry
+        op.bytesRead = bytesRead
+        op.complete(op)
+    }
+
+    async _processReadLogEntry(
+        fh: FileHandle,
+        logId: LogId,
+        entryNum: number,
+        offset: number,
+        length: number,
+    ): Promise<[GlobalLogEntry, number]> {
         throw new Error("not implemented")
     }
 
