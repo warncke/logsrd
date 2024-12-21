@@ -85,6 +85,23 @@ export default class PersistLog {
     moveNewToOldHotLog() {
         this.oldHotLogIndex = this.newHotLogIndex
         this.newHotLogIndex = null
+        // get/delete any current ops queued for old hot log which used to be new hot log
+        const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
+        // reassign ops to correct log
+        if (logQueue !== null) {
+            while (logQueue.opPending()) {
+                const [reads, writes] = logQueue.getReady()
+                for (const op of reads) {
+                    // reads stay on old hot log but need the correct index
+                    ;(op as ReadHeadIOOperation).index = this.oldHotLogIndex!
+                    this.persist.oldHotLog.ioQueue.enqueue(op)
+                }
+                for (const op of writes) {
+                    // writes got to new hot log
+                    this.persist.newHotLog.ioQueue.enqueue(op)
+                }
+            }
+        }
     }
 
     async emptyOldHotLog(): Promise<void> {
