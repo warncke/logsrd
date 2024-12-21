@@ -29,8 +29,12 @@ export default class IOOperation {
         this.promise =
             promise === undefined
                 ? new Promise((res, rej) => {
-                      this.resolve = res
-                      this.reject = rej
+                      if (this.resolve === null) {
+                          this.resolve = res
+                      }
+                      if (this.reject === null) {
+                          this.reject = rej
+                      }
                   })
                 : promise
         this.startTime = Date.now()

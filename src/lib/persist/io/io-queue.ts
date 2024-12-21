@@ -1,5 +1,6 @@
 import { IOOperationType, ReadIOOperation } from "../../globals"
 import IOOperation from "./io-operation"
+import ReadHeadIOOperation from "./read-head-io-operation"
 import WriteIOOperation from "./write-io-operation"
 
 export default class IOQueue {
@@ -27,6 +28,7 @@ export default class IOQueue {
             return [[], []]
         }
         const readOps: ReadIOOperation[] = []
+        const readHeadOps: ReadHeadIOOperation[] = []
         const writeOps: WriteIOOperation[] = []
         // pending items are in oldQueue now
         for (let i = 0; i < this.oldQueue!.length; i++) {
@@ -37,7 +39,17 @@ export default class IOQueue {
             // for now
 
             // item is read
-            if (op.op in [IOOperationType.READ_HEAD, IOOperationType.READ_RANGE, IOOperationType.READ_CONFIG]) {
+            if (op.op === IOOperationType.READ_HEAD) {
+                if (writeOps.length > 0) {
+                    // do not take read after write
+                    break
+                } else {
+                    op.processing = true
+                    readHeadOps.push(op as ReadHeadIOOperation)
+                }
+            } else if (
+                op.op in [IOOperationType.READ_RANGE, IOOperationType.READ_ENTRIES, IOOperationType.READ_CONFIG]
+            ) {
                 if (writeOps.length > 0) {
                     // do not take read after write
                     break
@@ -60,7 +72,28 @@ export default class IOQueue {
             }
         }
 
-        return [readOps, writeOps]
+        if (readHeadOps.length > 1) {
+            return [readOps.concat(this.combineReadHeadOps(readHeadOps)), writeOps]
+        } else if (readHeadOps.length === 1) {
+            return [readOps.concat(readHeadOps), writeOps]
+        } else {
+            return [readOps, writeOps]
+        }
+    }
+
+    combineReadHeadOps(ops: ReadHeadIOOperation[]): ReadHeadIOOperation {
+        const op = new ReadHeadIOOperation(ops[0].logId!)
+        op.reject = (err) => {
+            for (const op of ops) {
+                op.completeWithError(err)
+            }
+        }
+        op.resolve = (newOp) => {
+            for (const op of ops) {
+                op.complete(newOp)
+            }
+        }
+        return op
     }
 
     /**
