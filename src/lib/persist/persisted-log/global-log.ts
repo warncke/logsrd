@@ -18,7 +18,7 @@ type LogOp = {
     entryNum: number
     offset: number
     op: WriteIOOperation
-    logEntry: GlobalLogEntry | LogLogEntry
+    entry: GlobalLogEntry | LogLogEntry
 }
 type LogOpInfo = {
     logId: LogId
@@ -29,9 +29,22 @@ type LogOpInfo = {
 export default class GlobalLog extends PersistedLog {
     maxReadFHs: number = 16
     ioQueue = new GlobalLogIOQueue()
+    isColdLog: boolean = false
+    isOldHotLog: boolean = false
+    isNewHotLog: boolean = false
 
-    constructor(args: PersistLogArgs) {
+    constructor({
+        isColdLog = false,
+        isNewHotLog = false,
+        isOldHotLog = false,
+        logFile,
+        ...args
+    }: PersistLogArgs & { isColdLog?: boolean; isNewHotLog?: boolean; isOldHotLog?: boolean; logFile: string }) {
         super(args)
+        this.isColdLog = isColdLog
+        this.isNewHotLog = isNewHotLog
+        this.isOldHotLog = isOldHotLog
+        this.logFile = logFile
     }
 
     async _processReadRangeOp(op: ReadRangeIOOperation, fh: FileHandle): Promise<void> {}
@@ -97,17 +110,17 @@ export default class GlobalLog extends PersistedLog {
             // keep track of logOffset for each logId as this may be incremented with multiple writes during a batch
             const logOps = new Map<string, LogOpInfo>()
             const globalOps: LogOp[] = []
-            // offset of entry from length of file + bytes written in current write
-            const entryOffset = this.byteLength + writeBytes
             // add all items from queue to list of u8s to write
             for (const op of ops) {
+                // offset of entry from length of file + bytes written in current write
+                const entryOffset = this.byteLength + writeBytes
                 let logEntry: GlobalLogEntry | LogLogEntry
                 let logOpInfo: LogOpInfo | null = null
                 // this is a command entry for the global log
                 if (op.logId === null) {
                     // global logs are ephemeral so they do not have a real entryNum
                     logEntry = new LogLogEntry({ entry: op.entry, entryNum: 0 })
-                    globalOps.push({ entryNum: 0, offset: entryOffset, op: op, logEntry })
+                    globalOps.push({ entryNum: 0, offset: entryOffset, op: op, entry: logEntry })
                 }
                 // this is a log entry for a log log
                 else {
@@ -132,7 +145,7 @@ export default class GlobalLog extends PersistedLog {
                         entryNum: logOpInfo.maxEntryNum,
                         offset: entryOffset,
                         op: op,
-                        logEntry,
+                        entry: logEntry,
                     })
                 }
                 // bytes since last checkpoint including this entry
@@ -198,7 +211,7 @@ export default class GlobalLog extends PersistedLog {
             }
 
             for (const opInfo of globalOps) {
-                opInfo.op.bytesWritten = opInfo.logEntry.byteLength()
+                opInfo.op.bytesWritten = opInfo.entry.byteLength()
                 // resolves promise for op
                 opInfo.op.complete(opInfo.op)
             }
@@ -206,11 +219,11 @@ export default class GlobalLog extends PersistedLog {
             for (const opInfo of logOps.values()) {
                 const log = this.persist.getLog(opInfo.logId)
                 for (const op of opInfo.ops) {
-                    op.op.bytesWritten = op.logEntry.byteLength()
+                    op.op.bytesWritten = op.entry.byteLength()
                     // global log writes always go to hot log
-                    log.addNewHotLogEntry(op.op.entry, op.entryNum, op.offset, op.logEntry.byteLength())
+                    log.addNewHotLogEntry(op.op.entry, op.entryNum, op.offset, op.entry.byteLength())
                     // set the entry for the op to the created log entry
-                    op.op.entry = op.logEntry
+                    op.op.entry = op.entry
                     // resolves promise for op
                     op.op.complete(op.op)
                 }
@@ -226,111 +239,21 @@ export default class GlobalLog extends PersistedLog {
     }
 
     async init(): Promise<void> {
-        if (this.ioBlocked || this.ioInProgress !== null) {
-            throw new Error("Error starting initGlobal")
-        }
-        let fh: FileHandle | null = null
-        try {
-            fh = await fs.open(this.logFile, "r")
-        } catch (err: any) {
-            // ignore if file does not exist - it will be created on open for write
-            if (err.code === "ENOENT") {
-                return
-            }
-            throw err
-        }
-
-        try {
-            let lastU8: Uint8Array | null = null
-            let currU8 = new Uint8Array(GLOBAL_LOG_CHECKPOINT_INTERVAL)
-            // bytes read from file
-            let bytesRead = 0
-
-            while (true) {
-                const ret = await fh.read(currU8, { length: GLOBAL_LOG_CHECKPOINT_INTERVAL })
-                // bytes read from current buffer
-                let u8BytesRead = 0
-                // reads are aligned to checkpoint interval so every read after the first must start with checkpoint
-                if (bytesRead > GLOBAL_LOG_CHECKPOINT_INTERVAL) {
-                    const checkpoint = GlobalLogCheckpoint.fromU8(currU8) as GlobalLogCheckpoint
-                    u8BytesRead += checkpoint.byteLength()
-                    // if the last entry did not end on checkpoint boundary then need to combine from last and curr
-                    if (checkpoint.lastEntryOffset !== checkpoint.lastEntryLength) {
-                        const lastEntryU8 = Buffer.concat([
-                            new Uint8Array(lastU8!.buffer, lastU8!.byteLength - checkpoint.lastEntryLength),
-                            new Uint8Array(currU8.buffer, 0, checkpoint.lastEntryOffset),
-                        ])
-                        const res = GlobalLogEntryFactory.fromPartialU8(lastEntryU8)
-                        if (res.err) {
-                            throw res.err
-                        } else if (res.needBytes) {
-                            throw new Error("Error getting entry from checkpoint boundary")
-                        }
-                        const entry = res.entry
-                        const entryOffset = bytesRead - checkpoint.lastEntryOffset
-                        // handle command log entries
-                        if (entry instanceof LogLogEntry) {
-                            console.log(entry, entry.byteLength())
-                        }
-                        // otherwise this is log entry
-                        else {
-                            this.initEntry(entry as GlobalLogEntry, entryOffset)
-                        }
-                        u8BytesRead += entry!.byteLength()
-                    }
-                }
-
-                while (u8BytesRead < ret.bytesRead) {
-                    const res = GlobalLogEntryFactory.fromPartialU8(
-                        new Uint8Array(currU8.buffer, currU8.byteOffset + u8BytesRead, currU8.byteLength - u8BytesRead),
-                    )
-                    if (res.err) {
-                        throw res.err
-                    } else if (res.needBytes) {
-                        // swap last and curr buffers - on next iteration new data is read into old last and last is the old curr
-                        ;[lastU8] = [currU8]
-                        break
-                    }
-                    const entry = res.entry
-                    const entryOffset = bytesRead + u8BytesRead
-                    // handle command log entries
-                    if (entry instanceof LogLogEntry) {
-                        console.log(entry, entry.byteLength())
-                    }
-                    // otherwise this is log entry
-                    else {
-                        this.initEntry(entry as GlobalLogEntry, entryOffset)
-                    }
-                    u8BytesRead += entry!.byteLength()
-                }
-
-                bytesRead += ret.bytesRead
-                // if we did not read requested bytes then end of file reached
-                if (ret.bytesRead < GLOBAL_LOG_CHECKPOINT_INTERVAL) {
-                    break
-                }
-            }
-
-            this.byteLength = bytesRead
-        } finally {
-            if (fh !== null) {
-                await fh.close()
-            }
-        }
+        return super.init(GlobalLogEntryFactory, GLOBAL_LOG_CHECKPOINT_INTERVAL)
     }
 
-    initEntry(entry: GlobalLogEntry, globalOffset: number): void {
+    initGlobalLogEntry(entry: GlobalLogEntry, entryOffset: number): void {
         if (!entry.verify()) {
             // TODO: error handling
             console.error("cksum verification failed", entry)
         }
         const persistLog = this.persist.getLog(entry.logId)
         if (this.isNewHotLog) {
-            persistLog.addNewHotLogEntry(entry.entry, entry.entryNum, globalOffset, entry.byteLength())
+            persistLog.addNewHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         } else if (this.isColdLog) {
-            persistLog.addColdLogEntry(entry.entry, entry.entryNum, globalOffset, entry.byteLength())
+            persistLog.addColdLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         } else if (this.isOldHotLog) {
-            persistLog.addOldHotLogEntry(entry.entry, entry.entryNum, globalOffset, entry.byteLength())
+            persistLog.addOldHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         } else {
             throw new Error("unknown log type")
         }

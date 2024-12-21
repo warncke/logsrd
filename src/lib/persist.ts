@@ -178,7 +178,50 @@ export default class Persist {
         await this.newHotLog.init()
     }
 
-    async truncateHotLog(): Promise<void> {
+    async emptyOldHotLog(): Promise<void> {
+        try {
+            await fs.stat(this.oldHotLog.logFile)
+        } catch {
+            throw new Error("old hot log should exist")
+        }
+
+        for (const log of this.logs.values()) {
+            await log.emptyOldHotLog()
+        }
+
+        await this.oldHotLog.blockIO()
+        await this.oldHotLog.closeAllFHs()
+
+        // after each log finishes emptyOldHotLog it should not send any more reads to the old hot log
+        // because old hot log only processes reads anything pending should have been processed in the
+        // last batch that blockIO waits to finish
+        if (this.oldHotLog.ioQueue.opPending()) {
+            console.error("emptyOldHotLog completed with pending ops", this.oldHotLog.ioQueue)
+            const [reads, writes] = this.oldHotLog.ioQueue.getReady()
+            // this should never happen
+            if (writes.length > 0) {
+                console.error("oldHotLog had writes", writes)
+            }
+            // just fail them for now
+            for (const op of reads) {
+                op.completeWithError(new Error("read after empty on old hot log"))
+            }
+            for (const op of writes) {
+                op.completeWithError(new Error("write on old hot log"))
+            }
+        }
+
+        await fs.unlink(this.oldHotLog.logFile)
+        // create a new HotLog object to clear old state
+        this.oldHotLog = new HotLog({
+            config: this.oldHotLog.config,
+            logFile: this.oldHotLog.logFile,
+            persist: this,
+            isOldHotLog: true,
+        })
+    }
+
+    async moveNewToOldHotLog(): Promise<void> {
         let stat = null
         try {
             stat = await fs.stat(this.oldHotLog.logFile)
@@ -188,7 +231,7 @@ export default class Persist {
         if (stat !== null) {
             throw new Error("old hot log should not exist")
         }
-        // block IO and wait till all in progress ops complete
+        // block IO and wait till ioInProgress completes
         await this.newHotLog.blockIO()
         await this.newHotLog.closeAllFHs()
         // move new to old hot log file
@@ -223,7 +266,7 @@ export default class Persist {
         }
         // for all open logs the newHotLogIndex is now the oldHotLogIndex
         for (const log of this.logs.values()) {
-            log.swapNewHotToOldHot()
+            log.moveNewToOldHotLog()
         }
         // unblock IO
         await this.oldHotLog.unblockIO()

@@ -33,9 +33,9 @@ export default class GlobalLogCheckpoint extends LogEntry {
         this.crc = crc === undefined ? null : crc
     }
 
-    cksum(entryNum: number = 0): number {
+    cksum(): number {
         if (this.cksumNum === 0) {
-            this.cksumNum = crc32(this.entryU8())
+            this.cksumNum = crc32(this.u8())
         }
         return this.cksumNum
     }
@@ -44,7 +44,7 @@ export default class GlobalLogCheckpoint extends LogEntry {
         return this.crc === null ? false : this.crc === this.cksum()
     }
 
-    entryU8(): Uint8Array {
+    u8(): Uint8Array {
         if (this.#entryU8 !== null) {
             return this.#entryU8
         }
@@ -56,7 +56,7 @@ export default class GlobalLogCheckpoint extends LogEntry {
     }
 
     u8s(): Uint8Array[] {
-        return [this.entryU8(), new Uint8Array(new Uint32Array(this.cksum()).buffer)]
+        return [new Uint8Array(new Uint32Array(this.cksum()).buffer), this.u8()]
     }
 
     fromU8(u8: Uint8Array): GlobalLogCheckpoint {

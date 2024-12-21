@@ -15,6 +15,16 @@ export default class GlobalLogIOQueue {
         }
     }
 
+    deleteLogQueue(logId: LogId): IOQueue | null {
+        if (this.queues.has(logId.base64())) {
+            const logQueue = this.queues.get(logId.base64())!
+            this.queues.delete(logId.base64())
+            return logQueue
+        } else {
+            return null
+        }
+    }
+
     getLogQueue(logId: LogId): IOQueue {
         if (!this.queues.has(logId.base64())) {
             this.queues.set(logId.base64(), new IOQueue())

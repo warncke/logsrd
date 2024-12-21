@@ -73,7 +73,7 @@ export default class LogIndex {
         if (this.en.length >= 3) {
             return this.en.at(-3)!
         } else {
-            throw new Error("no enties")
+            throw new Error("no entries")
         }
     }
 }

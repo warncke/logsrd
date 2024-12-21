@@ -84,6 +84,7 @@ export default class Server {
 
     async getHead(logId: LogId): Promise<GlobalLogEntry | LogLogEntry> {
         const entry = await this.persist.getLog(logId).getHead()
+
         // TODO
         return entry
     }

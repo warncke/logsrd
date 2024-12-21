@@ -103,9 +103,10 @@ export const LOG_TYPE_MAP: { [index: string]: LogType } = {
 }
 
 export enum IOOperationType {
-    READ_RANGE,
-    READ_HEAD,
     READ_CONFIG,
+    READ_ENTRIES,
+    READ_HEAD,
+    READ_RANGE,
     WRITE,
 }
 
@@ -132,11 +133,7 @@ export interface ILogConfig {
  */
 export type PersistLogArgs = {
     config: ILogConfig
-    logFile: string
     persist: Persist
-    isColdLog?: boolean
-    isNewHotLog?: boolean
-    isOldHotLog?: boolean
 }
 
 /**

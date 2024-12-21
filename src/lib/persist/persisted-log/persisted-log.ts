@@ -1,5 +1,10 @@
 import fs, { FileHandle } from "node:fs/promises"
 
+import GlobalLogCheckpoint from "../../entry/global-log-checkpoint"
+import GlobalLogEntry from "../../entry/global-log-entry"
+import GlobalLogEntryFactory from "../../entry/global-log-entry-factory"
+import LogLogEntry from "../../entry/log-log-entry"
+import LogLogEntryFactory from "../../entry/log-log-entry-factory"
 import { IOOperationType, PersistLogArgs, ReadIOOperation } from "../../globals"
 import LogConfig from "../../log-config"
 import Persist from "../../persist"
@@ -13,34 +18,22 @@ import WriteIOOperation from "../io/write-io-operation"
 
 export default class PersistedLog {
     config: LogConfig
-    logFile: string
+    logFile: string = ""
     persist: Persist
     ioQueue: GlobalLogIOQueue | IOQueue = new IOQueue()
     writeFH: FileHandle | null = null
     freeReadFhs: Array<FileHandle> = []
+    openReadFhs: Array<FileHandle> = []
+    openingReadFhs: number = 0
     maxReadFHs: number = 1
-    openReadFhs: number = 0
     byteLength: number = 0
     ioBlocked: boolean = false
     ioInProgress: Promise<void> | null = null
-    isColdLog: boolean = false
-    isOldHotLog: boolean = false
-    isNewHotLog: boolean = false
 
-    constructor({
-        config,
-        logFile,
-        persist,
-        isColdLog = false,
-        isNewHotLog = false,
-        isOldHotLog = false,
-    }: PersistLogArgs) {
+    // should always be instantiated through GlobalLog or LogLog
+    constructor({ config, persist }: PersistLogArgs) {
         this.config = config
-        this.logFile = logFile
         this.persist = persist
-        this.isColdLog = isColdLog
-        this.isNewHotLog = isNewHotLog
-        this.isOldHotLog = isOldHotLog
     }
 
     async blockIO(): Promise<void> {
@@ -61,8 +54,16 @@ export default class PersistedLog {
         this.processOps()
     }
 
+    async waitInProgress(): Promise<void> {
+        if (this.ioInProgress !== null) {
+            await this.ioInProgress
+        }
+    }
+
     async closeAllFHs(): Promise<void> {
-        await Promise.all([Promise.all(this.freeReadFhs.map((fh) => fh.close())), this.closeWriteFH()])
+        await Promise.all([Promise.all(this.openReadFhs.map((fh) => fh.close())), this.closeWriteFH()])
+        this.openReadFhs = []
+        this.freeReadFhs = []
     }
 
     getReadFH(): FileHandle | null {
@@ -70,15 +71,17 @@ export default class PersistedLog {
             return this.freeReadFhs.pop()!
         }
         // TODO: add global limit
-        if (this.openReadFhs < this.maxReadFHs) {
+        if (this.openReadFhs.length + this.openingReadFhs < this.maxReadFHs) {
             // increment open here because it needs to be synchronous
-            this.openReadFhs += 1
+            this.openingReadFhs += 1
             fs.open(this.logFile, "r")
                 .then((fh) => {
+                    this.openingReadFhs -= 1
+                    this.openReadFhs.push(fh)
                     this.freeReadFhs.push(fh)
                 })
                 .catch((err) => {
-                    this.openReadFhs -= 1
+                    this.openingReadFhs -= 1
                     console.error(err)
                 })
         }
@@ -88,11 +91,11 @@ export default class PersistedLog {
     closeReadFH(fh: FileHandle): void {
         fh.close()
             .then(() => {
-                this.openReadFhs -= 1
+                this.openReadFhs = this.openReadFhs.filter((f) => f !== fh)
             })
             .catch((err) => {
                 console.error(err)
-                this.openReadFhs -= 1
+                this.openReadFhs = this.openReadFhs.filter((f) => f !== fh)
             })
     }
 
@@ -249,5 +252,108 @@ export default class PersistedLog {
         await dstFH.close()
         // truncate file
         await fs.truncate(this.logFile, byteLength)
+    }
+
+    async init(
+        logEntryFactory: typeof GlobalLogEntryFactory | typeof LogLogEntryFactory,
+        checkpontInterval: number,
+    ): Promise<void> {
+        if (this.ioBlocked || this.ioInProgress !== null) {
+            throw new Error("Error starting initGlobal")
+        }
+        let fh: FileHandle | null = null
+        try {
+            fh = await fs.open(this.logFile, "r")
+        } catch (err: any) {
+            // ignore if file does not exist - it will be created on open for write
+            if (err.code === "ENOENT") {
+                return
+            }
+            throw err
+        }
+
+        try {
+            let lastU8: Uint8Array | null = null
+            let currU8 = new Uint8Array(checkpontInterval)
+            // bytes read from file
+            let bytesRead = 0
+
+            while (true) {
+                const ret = await fh.read(currU8, { length: checkpontInterval })
+                // bytes read from current buffer
+                let u8BytesRead = 0
+                // reads are aligned to checkpoint interval so every read after the first must start with checkpoint
+                if (bytesRead > checkpontInterval) {
+                    const checkpoint = GlobalLogCheckpoint.fromU8(currU8) as GlobalLogCheckpoint
+                    u8BytesRead += checkpoint.byteLength()
+                    // if the last entry did not end on checkpoint boundary then need to combine from last and curr
+                    if (checkpoint.lastEntryOffset !== checkpoint.lastEntryLength) {
+                        const lastEntryU8 = Buffer.concat([
+                            new Uint8Array(lastU8!.buffer, lastU8!.byteLength - checkpoint.lastEntryLength),
+                            new Uint8Array(currU8.buffer, 0, checkpoint.lastEntryOffset),
+                        ])
+                        const res = logEntryFactory.fromPartialU8(lastEntryU8)
+                        if (res.entry) {
+                            const entry = res.entry
+                            const entryOffset = bytesRead - checkpoint.lastEntryOffset
+                            if (entry instanceof LogLogEntry) {
+                                this.initLogLogEntry(entry, entryOffset)
+                            } else {
+                                this.initGlobalLogEntry(entry, entryOffset)
+                            }
+                            u8BytesRead += entry!.byteLength()
+                        } else {
+                            if (res.err) {
+                                throw res.err
+                            }
+                            if (res.needBytes) {
+                                throw new Error("Error getting entry from checkpoint boundary")
+                            }
+                        }
+                    }
+                }
+
+                while (u8BytesRead < ret.bytesRead) {
+                    const res = logEntryFactory.fromPartialU8(
+                        new Uint8Array(currU8.buffer, currU8.byteOffset + u8BytesRead, currU8.byteLength - u8BytesRead),
+                    )
+                    if (res.err) {
+                        throw res.err
+                    } else if (res.needBytes) {
+                        // swap last and curr buffers - on next iteration new data is read into old last and last is the old curr
+                        ;[lastU8] = [currU8]
+                        break
+                    }
+                    const entry = res.entry
+                    const entryOffset = bytesRead + u8BytesRead
+                    if (entry instanceof LogLogEntry) {
+                        this.initLogLogEntry(entry, entryOffset)
+                    } else {
+                        this.initGlobalLogEntry(entry as GlobalLogEntry, entryOffset)
+                    }
+                    u8BytesRead += entry!.byteLength()
+                }
+
+                bytesRead += ret.bytesRead
+                // if we did not read requested bytes then end of file reached
+                if (ret.bytesRead < checkpontInterval) {
+                    break
+                }
+            }
+
+            this.byteLength = bytesRead
+        } finally {
+            if (fh !== null) {
+                await fh.close()
+            }
+        }
+    }
+
+    initLogLogEntry(entry: LogLogEntry, entryOffset: number) {
+        throw new Error("not implemented")
+    }
+
+    initGlobalLogEntry(entry: GlobalLogEntry, entryOffset: number) {
+        throw new Error("not implemented")
     }
 }
