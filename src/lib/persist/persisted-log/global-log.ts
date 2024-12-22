@@ -97,11 +97,6 @@ export default class GlobalLog extends PersistedLog {
             const u8s: Uint8Array[] = []
             // keep track of the number of bytes expected to be written
             let writeBytes = 0
-            // starts with a positive number that is the number of bytes since the last checkpoint
-            let checkpointOffset =
-                this.byteLength > GLOBAL_LOG_CHECKPOINT_INTERVAL
-                    ? this.byteLength % GLOBAL_LOG_CHECKPOINT_INTERVAL
-                    : this.byteLength
             // keep track of logOffset for each logId as this may be incremented with multiple writes during a batch
             const logOps = new Map<string, LogOpInfo>()
             const globalOps: LogOp[] = []
@@ -144,44 +139,57 @@ export default class GlobalLog extends PersistedLog {
                         entry: logEntry,
                     })
                 }
-                // bytes since last checkpoint including this entry
-                const bytesSinceCheckpoint = checkpointOffset + writeBytes + logEntry.byteLength()
-                // if this entry would cross or end at checkpoint boundardy then add checkpoint
-                if (bytesSinceCheckpoint >= GLOBAL_LOG_CHECKPOINT_INTERVAL) {
+                // total length of file with scheduled writes
+                const writtenLength = this.byteLength + writeBytes
+                let nextCheckpointOffset =
+                    writtenLength > GLOBAL_LOG_CHECKPOINT_INTERVAL
+                        ? writtenLength -
+                          (writtenLength % GLOBAL_LOG_CHECKPOINT_INTERVAL) +
+                          GLOBAL_LOG_CHECKPOINT_INTERVAL
+                        : GLOBAL_LOG_CHECKPOINT_INTERVAL
+                // if this entry would cross a checkpoint boundary then add checkpoint
+                if (
+                    writtenLength < nextCheckpointOffset &&
+                    writtenLength + logEntry.byteLength() > nextCheckpointOffset
+                ) {
                     // length of buffer segment to write before checkpoint
-                    const lastEntryOffset = bytesSinceCheckpoint - GLOBAL_LOG_CHECKPOINT_INTERVAL
-                    // create checkpoint entry
+                    const lastEntryOffset = nextCheckpointOffset - writtenLength
                     const checkpointEntry = new GlobalLogCheckpoint({
                         lastEntryOffset,
                         lastEntryLength: logEntry.byteLength(),
                     })
-                    // offset becomes negative because now we need an additional GLOBAL_LOG_CHECKPOINT_INTERVAL
-                    // bytes before the next offset
-                    checkpointOffset = -(writeBytes + lastEntryOffset)
-                    // if entry ends directly at checkpoint then add before
-                    if (lastEntryOffset === logEntry.byteLength()) {
-                        // add log entry
-                        u8s.push(...logEntry.u8s())
-                        writeBytes += logEntry.byteLength()
-                        // add checkpoint entry
-                        u8s.push(...checkpointEntry.u8s())
-                        writeBytes += checkpointEntry.byteLength()
-                    }
-                    // otherwise split entry and add before/after checkpoint
-                    else {
-                        // use Buffer here because this will never run in browser
-                        const entryBuffer = Buffer.concat(logEntry.u8s(), logEntry.byteLength())
-                        // add beginning segment of entry before checkpoint
-                        u8s.push(entryBuffer.slice(0, lastEntryOffset))
-                        writeBytes += lastEntryOffset
-                        // add checkpoint entry
-                        u8s.push(...checkpointEntry.u8s())
-                        writeBytes += checkpointEntry.byteLength()
-                        // add end segment of entry after checkpoint
-                        u8s.push(entryBuffer.slice(lastEntryOffset))
-                        writeBytes += entryBuffer.byteLength - lastEntryOffset
-                    }
+                    // use Buffer here because this will never run in browser
+                    const entryBuffer = Buffer.concat(logEntry.u8s())
+                    // add beginning segment of entry before checkpoint
+                    const beginU8 = new Uint8Array(entryBuffer.buffer, entryBuffer.byteOffset, lastEntryOffset)
+                    u8s.push(beginU8)
+                    writeBytes += lastEntryOffset
+                    // add checkpoint entry
+                    u8s.push(...checkpointEntry.u8s())
+                    writeBytes += checkpointEntry.byteLength()
+                    // add end segment of entry after checkpoint
+                    const endU8 = new Uint8Array(
+                        entryBuffer.buffer,
+                        entryBuffer.byteOffset + lastEntryOffset,
+                        logEntry.byteLength() - lastEntryOffset,
+                    )
+                    u8s.push(endU8)
+                    writeBytes += logEntry.byteLength() - lastEntryOffset
+                } else if (
+                    writtenLength > GLOBAL_LOG_CHECKPOINT_INTERVAL &&
+                    writtenLength % GLOBAL_LOG_CHECKPOINT_INTERVAL === 0
+                ) {
+                    // create checkpoint entry
+                    // TODO: real offset?
+                    const checkpointEntry = new GlobalLogCheckpoint({
+                        lastEntryOffset: 0,
+                        lastEntryLength: 0,
+                    })
+                    // add checkpoint entry
+                    u8s.push(...checkpointEntry.u8s())
+                    writeBytes += checkpointEntry.byteLength()
                 }
+                // if we are exactly at checkpoint boundary then add a checkpoint
                 // otherwise add entry
                 else {
                     u8s.push(...logEntry.u8s())
@@ -197,9 +205,11 @@ export default class GlobalLog extends PersistedLog {
                 // update internal file length
                 this.byteLength += ret.bytesWritten
             } else {
+                console.error("writeBytes mismatch", writeBytes, ret.bytesWritten)
                 try {
                     if (ret.bytesWritten > 0) {
                         await this.truncate(this.byteLength)
+                        process.exit(1)
                     }
                 } catch (err) {
                     // we are in a corrupted state here but still need this to be correct

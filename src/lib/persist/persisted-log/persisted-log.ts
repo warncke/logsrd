@@ -261,7 +261,7 @@ export default class PersistedLog {
         if (byteLength < 1) {
             throw new Error(`trucate called with ${byteLength}`)
         }
-        await this.closeWriteFH()
+        await this.closeAllFHs()
         // open file handles to copy data to be truncated
         const srcFH = await fs.open(this.logFile, "r")
         const dstFH = await fs.open(`${this.logFile}.truncated.${Date.now()}`, "w")
@@ -316,14 +316,25 @@ export default class PersistedLog {
                 // bytes read from current buffer
                 let u8BytesRead = 0
                 // reads are aligned to checkpoint interval so every read after the first must start with checkpoint
-                if (bytesRead > checkpontInterval) {
-                    const checkpoint = GlobalLogCheckpoint.fromU8(currU8) as GlobalLogCheckpoint
+                if (bytesRead >= checkpontInterval) {
+                    const checkpoint = GlobalLogCheckpoint.fromU8(currU8)
+                    if (!checkpoint.verify()) {
+                        throw new Error(`Error verifying checkpoint at ${bytesRead}`)
+                    }
                     u8BytesRead += checkpoint.byteLength()
                     // if the last entry did not end on checkpoint boundary then need to combine from last and curr
                     if (checkpoint.lastEntryOffset !== checkpoint.lastEntryLength) {
                         const lastEntryU8 = Buffer.concat([
-                            new Uint8Array(lastU8!.buffer, lastU8!.byteLength - checkpoint.lastEntryLength),
-                            new Uint8Array(currU8.buffer, 0, checkpoint.lastEntryOffset),
+                            new Uint8Array(
+                                lastU8!.buffer,
+                                lastU8!.byteLength - checkpoint.lastEntryOffset,
+                                checkpoint.lastEntryOffset,
+                            ),
+                            new Uint8Array(
+                                currU8.buffer,
+                                u8BytesRead,
+                                checkpoint.lastEntryLength - checkpoint.lastEntryOffset,
+                            ),
                         ])
                         const res = logEntryFactory.fromPartialU8(lastEntryU8)
                         if (res.entry) {
@@ -334,13 +345,13 @@ export default class PersistedLog {
                             } else {
                                 this.initGlobalLogEntry(entry, entryOffset)
                             }
-                            u8BytesRead += entry!.byteLength()
+                            u8BytesRead += entry!.byteLength() - checkpoint.lastEntryOffset
                         } else {
                             if (res.err) {
                                 throw res.err
                             }
                             if (res.needBytes) {
-                                throw new Error("Error getting entry from checkpoint boundary")
+                                throw new Error(`Error getting entry at checkpoint needBytes=${res.needBytes}`)
                             }
                         }
                     }
@@ -351,7 +362,7 @@ export default class PersistedLog {
                         new Uint8Array(currU8.buffer, currU8.byteOffset + u8BytesRead, currU8.byteLength - u8BytesRead),
                     )
                     if (res.err) {
-                        throw res.err
+                        throw new Error(`${res.err.message} at offset ${bytesRead + u8BytesRead}`)
                     } else if (res.needBytes) {
                         // swap last and curr buffers - on next iteration new data is read into old last and last is the old curr
                         ;[lastU8] = [currU8]
