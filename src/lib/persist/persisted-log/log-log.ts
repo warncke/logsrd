@@ -81,7 +81,7 @@ export default class LogLog extends PersistedLog {
             entry = LogLogEntryFactory.fromU8(u8)
         } catch (err) {
             throw new Error(
-                `error reading entry log=${this.logName()} logId=${logId.base64()} entryNum=${entryNum} offset=${offset} length=${length}`,
+                `error reading entry msg=${(err as Error).message} log=${this.logName()} logId=${logId.base64()} entryNum=${entryNum} offset=${offset} length=${length}`,
             )
         }
         if (!entry.verify()) {
@@ -215,7 +215,7 @@ export default class LogLog extends PersistedLog {
 
     // TODO: initPartial from checkpoint
     async init(): Promise<void> {
-        return super.init(LogLogEntryFactory, LOG_LOG_CHECKPOINT_INTERVAL)
+        return super.init(LogLogEntryFactory, LogLogCheckpoint, LOG_LOG_CHECKPOINT_INTERVAL)
     }
 
     initLogLogEntry(entry: LogLogEntry, entryOffset: number) {

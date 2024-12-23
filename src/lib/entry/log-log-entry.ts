@@ -32,9 +32,10 @@ export default class LogLogEntry extends LogEntry {
             return this.#prefixU8
         }
         this.#prefixU8 = new Uint8Array(LOG_LOG_PREFIX_BYTE_LENGTH)
-        this.#prefixU8.set(new Uint8Array(new Uint32Array([this.entryNum]).buffer))
-        this.#prefixU8.set(new Uint8Array(new Uint16Array([this.entry.byteLength()]).buffer), 4)
-        this.#prefixU8.set(new Uint8Array(new Uint32Array([this.cksum()]).buffer), 6)
+        this.#prefixU8.set(TYPE_BYTE)
+        this.#prefixU8.set(new Uint8Array(new Uint32Array([this.entryNum]).buffer), 1)
+        this.#prefixU8.set(new Uint8Array(new Uint16Array([this.entry.byteLength()]).buffer), 5)
+        this.#prefixU8.set(new Uint8Array(new Uint32Array([this.cksum()]).buffer), 7)
         return this.#prefixU8
     }
 

@@ -292,7 +292,7 @@ export default class GlobalLog extends PersistedLog {
     }
 
     async init(): Promise<void> {
-        return super.init(GlobalLogEntryFactory, GLOBAL_LOG_CHECKPOINT_INTERVAL)
+        return super.init(GlobalLogEntryFactory, GlobalLogCheckpoint, GLOBAL_LOG_CHECKPOINT_INTERVAL)
     }
 
     initGlobalLogEntry(entry: GlobalLogEntry, entryOffset: number): void {

@@ -41,7 +41,6 @@ export default class PersistLog {
     async getLog(): Promise<LogLog> {
         if (this.logLog === null) {
             this.logLog = new LogLog({
-                config: await this.getConfig(),
                 persist: this.persist,
                 persistLog: this,
             })
@@ -222,6 +221,9 @@ export default class PersistLog {
         if (this.config !== null) {
             return this.config
         }
+        if (!this.hasGlobalConfig() && this.logLog === null) {
+            await this.getLog()
+        }
         const op = await this.readConfigOp(...this.readConfigTargetIndex())
         if (op.entry === null) {
             throw new Error("entry is null")
@@ -232,6 +234,18 @@ export default class PersistLog {
             throw new Error("Invalid entry type for config")
         }
         return this.config
+    }
+
+    hasGlobalConfig(): boolean {
+        if (this.newHotLogIndex !== null && this.newHotLogIndex.hasConfig()) {
+            return true
+        } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
+            return true
+        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasConfig()) {
+            return true
+        } else {
+            return false
+        }
     }
 
     readConfigTargetIndex(): [PersistedLog, LogIndex] {

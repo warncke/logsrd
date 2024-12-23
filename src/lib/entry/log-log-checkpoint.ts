@@ -57,11 +57,10 @@ export default class LogLogCheckpoint extends LogEntry {
         if (this.#entryU8 !== null) {
             return this.#entryU8
         }
-        this.#entryU8 = new Uint8Array(9)
-        this.#entryU8.set(TYPE_BYTE)
-        this.#entryU8.set(new Uint8Array(new Uint16Array([this.lastEntryOffset]).buffer), 1)
-        this.#entryU8.set(new Uint8Array(new Uint16Array([this.lastEntryLength]).buffer), 3)
-        this.#entryU8.set(new Uint8Array(new Uint32Array([this.lastConfigOffset]).buffer), 5)
+        this.#entryU8 = new Uint8Array(8)
+        this.#entryU8.set(new Uint8Array(new Uint16Array([this.lastEntryOffset]).buffer))
+        this.#entryU8.set(new Uint8Array(new Uint16Array([this.lastEntryLength]).buffer), 2)
+        this.#entryU8.set(new Uint8Array(new Uint32Array([this.lastConfigOffset]).buffer), 4)
         return this.#entryU8
     }
 

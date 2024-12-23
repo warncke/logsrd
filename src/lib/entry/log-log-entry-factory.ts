@@ -1,5 +1,6 @@
 import { EntryType, LOG_LOG_PREFIX_BYTE_LENGTH } from "../globals"
 import LogEntry from "./log-entry"
+import LogEntryFactory from "./log-entry-factory"
 import LogLogEntry from "./log-log-entry"
 
 export default class LogLogEntryFactory {
@@ -50,7 +51,7 @@ export default class LogLogEntryFactory {
         const entryLength = LogLogEntryFactory.entryLengthFromU8(u8)
         const entryNum = new Uint32Array(u8.buffer.slice(u8.byteOffset + 1, u8.byteOffset + 5))[0]
         const crc = new Uint32Array(u8.buffer.slice(u8.byteOffset + 7, u8.byteOffset + 11))[0]
-        const entry = LogLogEntryFactory.fromU8(
+        const entry = LogEntryFactory.fromU8(
             new Uint8Array(u8.buffer, u8.byteOffset + LOG_LOG_PREFIX_BYTE_LENGTH, entryLength),
         )
 

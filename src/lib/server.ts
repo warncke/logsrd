@@ -96,11 +96,13 @@ export default class Server {
             } else {
                 limit = MAX_RESPONSE_ENTRIES
             }
+            const config = await this.persist.getLog(logId).getConfig()
             return this.persist.getLog(logId).getEntries(offset, limit)
         }
     }
 
     async getHead(logId: LogId): Promise<GlobalLogEntry | LogLogEntry> {
+        const config = await this.persist.getLog(logId).getConfig()
         const entry = await this.persist.getLog(logId).getHead()
 
         // TODO

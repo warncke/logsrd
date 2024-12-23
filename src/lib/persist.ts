@@ -1,7 +1,6 @@
 import fs from "node:fs/promises"
 import path from "path"
 
-import LogConfig from "./log-config"
 import LogId from "./log-id"
 import PersistLog from "./persist/persist-log"
 import ColdLog from "./persist/persisted-log/cold-log"
@@ -135,28 +134,17 @@ export default class Persist {
         config.blobDir = config.blobDir || path.join(config.dataDir, "blobs")
         config.logDir = config.logDir || path.join(config.dataDir, "logs")
         this.config = config
-        // TODO: this is hacky but i want to be able to control log reading based on log
-        // config and i dont want to make these params optional and then have to add checks
-        // everywhere to statisfy tsc so i am doing it like this for now
-        const globalLogConfig = new LogConfig({
-            logId: new LogId(new Uint8Array(16)),
-            master: "",
-            type: "global",
-        })
         this.coldLog = new ColdLog({
-            config: globalLogConfig,
             logFile: path.join(this.config.dataDir, config.coldLogFileName),
             persist: this,
             isColdLog: true,
         })
         this.oldHotLog = new HotLog({
-            config: globalLogConfig,
             logFile: path.join(this.config.dataDir, `${config.hotLogFileName}.old`),
             persist: this,
             isOldHotLog: true,
         })
         this.newHotLog = new HotLog({
-            config: globalLogConfig,
             logFile: path.join(this.config.dataDir, `${config.hotLogFileName}.new`),
             persist: this,
             isNewHotLog: true,
@@ -214,7 +202,6 @@ export default class Persist {
         await fs.unlink(this.oldHotLog.logFile)
         // create a new HotLog object to clear old state
         this.oldHotLog = new HotLog({
-            config: this.oldHotLog.config,
             logFile: this.oldHotLog.logFile,
             persist: this,
             isOldHotLog: true,
@@ -237,7 +224,6 @@ export default class Persist {
         // move new to old hot log file
         await fs.rename(this.newHotLog.logFile, this.oldHotLog.logFile)
         const newHotLog = new HotLog({
-            config: this.newHotLog.config,
             logFile: this.newHotLog.logFile,
             persist: this,
             isNewHotLog: true,

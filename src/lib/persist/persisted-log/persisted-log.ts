@@ -3,10 +3,10 @@ import fs, { FileHandle } from "node:fs/promises"
 import GlobalLogCheckpoint from "../../entry/global-log-checkpoint"
 import GlobalLogEntry from "../../entry/global-log-entry"
 import GlobalLogEntryFactory from "../../entry/global-log-entry-factory"
+import LogLogCheckpoint from "../../entry/log-log-checkpoint"
 import LogLogEntry from "../../entry/log-log-entry"
 import LogLogEntryFactory from "../../entry/log-log-entry-factory"
 import { IOOperationType, PersistLogArgs, ReadIOOperation } from "../../globals"
-import LogConfig from "../../log-config"
 import LogId from "../../log-id"
 import Persist from "../../persist"
 import GlobalLogIOQueue from "../io/global-log-io-queue"
@@ -19,7 +19,6 @@ import ReadRangeIOOperation from "../io/read-range-io-operation"
 import WriteIOOperation from "../io/write-io-operation"
 
 export default class PersistedLog {
-    config: LogConfig
     logFile: string = ""
     persist: Persist
     ioQueue: GlobalLogIOQueue | IOQueue = new IOQueue()
@@ -33,8 +32,7 @@ export default class PersistedLog {
     ioInProgress: Promise<void> | null = null
 
     // should always be instantiated through GlobalLog or LogLog
-    constructor({ config, persist }: PersistLogArgs) {
-        this.config = config
+    constructor({ persist }: PersistLogArgs) {
         this.persist = persist
     }
 
@@ -289,7 +287,8 @@ export default class PersistedLog {
 
     async init(
         logEntryFactory: typeof GlobalLogEntryFactory | typeof LogLogEntryFactory,
-        checkpontInterval: number,
+        checkpointClass: typeof GlobalLogCheckpoint | typeof LogLogCheckpoint,
+        checkpointInterval: number,
     ): Promise<void> {
         if (this.ioBlocked || this.ioInProgress !== null) {
             throw new Error("Error starting initGlobal")
@@ -306,20 +305,20 @@ export default class PersistedLog {
         }
 
         try {
-            let lastU8 = new Uint8Array(checkpontInterval)
-            let currU8 = new Uint8Array(checkpontInterval)
+            let lastU8 = new Uint8Array(checkpointInterval)
+            let currU8 = new Uint8Array(checkpointInterval)
             // bytes read from file
             let bytesRead = 0
 
             while (true) {
-                const ret = await fh.read(currU8, { length: checkpontInterval })
+                const ret = await fh.read(currU8, { length: checkpointInterval })
                 // bytes read from current buffer
                 let u8BytesRead = 0
                 // reads are aligned to checkpoint interval so every read after the first must start with checkpoint
-                if (bytesRead >= checkpontInterval) {
+                if (bytesRead >= checkpointInterval) {
                     let checkpoint
                     try {
-                        checkpoint = GlobalLogCheckpoint.fromU8(currU8)
+                        checkpoint = checkpointClass.fromU8(currU8) as GlobalLogCheckpoint | LogLogCheckpoint
                     } catch (err) {
                         throw new Error(`Error parsing checkpoint at ${bytesRead}: ${err}`)
                     }
@@ -399,7 +398,7 @@ export default class PersistedLog {
 
                 bytesRead += ret.bytesRead
                 // if we did not read requested bytes then end of file reached
-                if (ret.bytesRead < checkpontInterval) {
+                if (ret.bytesRead < checkpointInterval) {
                     if (u8BytesRead !== ret.bytesRead) {
                         console.error(
                             `u8BytesRead=${u8BytesRead}, bytesRead=${bytesRead}, ret.bytesRead=${ret.bytesRead}`,

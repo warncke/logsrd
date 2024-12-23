@@ -1,5 +1,4 @@
-import { create } from "domain"
-import { request } from "undici"
+import { Pool, request } from "undici"
 
 run().catch((err) => console.error(err.message, err.stack))
 
@@ -45,6 +44,13 @@ async function run() {
 }
 
 async function testIteration() {
+    const dispatcher = new Pool("http://127.0.0.1:7000", {
+        pipelining: 10,
+        connections: 10,
+        connect: {
+            rejectUnauthorized: false,
+        },
+    })
     const stats = {
         createLogRequests: 0,
         createLogErrors: 0,
@@ -58,6 +64,7 @@ async function testIteration() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: '{"type":"json"}',
+        dispatcher,
     })
 
     if (statusCode !== 200) {
@@ -73,6 +80,7 @@ async function testIteration() {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: `{"entryNum":${entryNum}}`,
+            dispatcher,
         })
         stats.appendRequests++
 
@@ -82,8 +90,13 @@ async function testIteration() {
             return stats
         }
 
-        for (let i = 0; i < 10; i++) {
-            const { statusCode, body } = await request(`http://127.0.0.1:7000/log/${config.logId}/head`)
+        const headRequests = Array(10)
+            .fill(null)
+            .map(() => request(`http://127.0.0.1:7000/log/${config.logId}/head`, { dispatcher }))
+        const headResponses = await Promise.all(headRequests)
+
+        for (const response of headResponses) {
+            const { statusCode, body } = response
             stats.headRequests++
 
             if (statusCode !== 200) {
