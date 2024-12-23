@@ -1,6 +1,6 @@
 import { crc32 } from "@node-rs/crc32"
 
-import { EntryType } from "../globals"
+import { EntryType, LOG_LOG_CHECKPOINT_BYTE_LENGTH } from "../globals"
 import LogEntry from "./log-entry"
 
 const TYPE_BYTE = new Uint8Array([EntryType.LOG_LOG_CHECKPOINT])
@@ -38,6 +38,10 @@ export default class LogLogCheckpoint extends LogEntry {
         this.crc = crc === undefined ? null : crc
     }
 
+    byteLength(): number {
+        return LOG_LOG_CHECKPOINT_BYTE_LENGTH
+    }
+
     cksum(entryNum: number = 0): number {
         if (this.cksumNum === 0) {
             this.cksumNum = crc32(this.u8())
@@ -62,15 +66,19 @@ export default class LogLogCheckpoint extends LogEntry {
     }
 
     u8s(): Uint8Array[] {
-        return [new Uint8Array(new Uint32Array(this.cksum()).buffer), this.u8()]
+        return [TYPE_BYTE, this.u8(), new Uint8Array(new Uint32Array([this.cksum()]).buffer)]
     }
 
     fromU8(u8: Uint8Array): LogLogCheckpoint {
+        const entryType: number | undefined = u8.at(0)
+        if (entryType !== EntryType.LOG_LOG_CHECKPOINT) {
+            throw new Error(`Invalid entryType: ${entryType}`)
+        }
         return new LogLogCheckpoint({
-            crc: new Uint32Array(u8.buffer.slice(u8.byteOffset, u8.byteOffset + 4))[0],
-            lastEntryOffset: new Uint16Array(u8.buffer.slice(u8.byteOffset + 4, u8.byteOffset + 6))[0],
-            lastEntryLength: new Uint16Array(u8.buffer.slice(u8.byteOffset + 6, u8.byteOffset + 8))[0],
-            lastConfigOffset: new Uint32Array(u8.buffer.slice(u8.byteOffset + 8, u8.byteOffset + 12))[0],
+            lastEntryOffset: new Uint16Array(u8.buffer.slice(u8.byteOffset + 1, u8.byteOffset + 3))[0],
+            lastEntryLength: new Uint16Array(u8.buffer.slice(u8.byteOffset + 3, u8.byteOffset + 5))[0],
+            lastConfigOffset: new Uint32Array(u8.buffer.slice(u8.byteOffset + 5, u8.byteOffset + 9))[0],
+            crc: new Uint32Array(u8.buffer.slice(u8.byteOffset + 9, u8.byteOffset + 13))[0],
         })
     }
 }

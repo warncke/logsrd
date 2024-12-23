@@ -241,7 +241,7 @@ export default class PersistedLog {
         entryNum: number,
         offset: number,
         length: number,
-    ): Promise<[GlobalLogEntry, number]> {
+    ): Promise<[GlobalLogEntry | LogLogEntry, number]> {
         throw new Error("not implemented")
     }
 
@@ -306,7 +306,7 @@ export default class PersistedLog {
         }
 
         try {
-            let lastU8: Uint8Array | null = null
+            let lastU8 = new Uint8Array(checkpontInterval)
             let currU8 = new Uint8Array(checkpontInterval)
             // bytes read from file
             let bytesRead = 0
@@ -317,35 +317,46 @@ export default class PersistedLog {
                 let u8BytesRead = 0
                 // reads are aligned to checkpoint interval so every read after the first must start with checkpoint
                 if (bytesRead >= checkpontInterval) {
-                    const checkpoint = GlobalLogCheckpoint.fromU8(currU8)
+                    let checkpoint
+                    try {
+                        checkpoint = GlobalLogCheckpoint.fromU8(currU8)
+                    } catch (err) {
+                        throw new Error(`Error parsing checkpoint at ${bytesRead}: ${err}`)
+                    }
                     if (!checkpoint.verify()) {
                         throw new Error(`Error verifying checkpoint at ${bytesRead}`)
                     }
+                    if (checkpoint.lastEntryOffset < 0) {
+                        throw new Error(`Error parsing checkpoint at ${bytesRead}: lastEntryOffset < 0`)
+                    }
+                    // add length of checkpoint to bytes read from current buffer
                     u8BytesRead += checkpoint.byteLength()
-                    // if the last entry did not end on checkpoint boundary then need to combine from last and curr
-                    if (checkpoint.lastEntryOffset !== checkpoint.lastEntryLength) {
+                    // last entry is on either side of checkpoint and must be combined
+                    if (checkpoint.lastEntryOffset !== 0) {
                         const lastEntryU8 = Buffer.concat([
                             new Uint8Array(
                                 lastU8!.buffer,
-                                lastU8!.byteLength - checkpoint.lastEntryOffset,
+                                lastU8!.byteOffset + lastU8!.byteLength - checkpoint.lastEntryOffset,
                                 checkpoint.lastEntryOffset,
                             ),
                             new Uint8Array(
                                 currU8.buffer,
-                                u8BytesRead,
+                                currU8.byteOffset + u8BytesRead,
                                 checkpoint.lastEntryLength - checkpoint.lastEntryOffset,
                             ),
                         ])
                         const res = logEntryFactory.fromPartialU8(lastEntryU8)
                         if (res.entry) {
                             const entry = res.entry
+                            // entry offset from beginning of file is bytesRead from file minus lastEntryOffset from the checkpoint
                             const entryOffset = bytesRead - checkpoint.lastEntryOffset
                             if (entry instanceof LogLogEntry) {
                                 this.initLogLogEntry(entry, entryOffset)
                             } else {
                                 this.initGlobalLogEntry(entry, entryOffset)
                             }
-                            u8BytesRead += entry!.byteLength() - checkpoint.lastEntryOffset
+                            // add the length of the end part of entry to bytes read from current buffer
+                            u8BytesRead += checkpoint.lastEntryLength - checkpoint.lastEntryOffset
                         } else {
                             if (res.err) {
                                 throw res.err
@@ -359,13 +370,15 @@ export default class PersistedLog {
 
                 while (u8BytesRead < ret.bytesRead) {
                     const res = logEntryFactory.fromPartialU8(
-                        new Uint8Array(currU8.buffer, currU8.byteOffset + u8BytesRead, currU8.byteLength - u8BytesRead),
+                        new Uint8Array(currU8.buffer, currU8.byteOffset + u8BytesRead, ret.bytesRead - u8BytesRead),
                     )
                     if (res.err) {
                         throw new Error(`${res.err.message} at offset ${bytesRead + u8BytesRead}`)
                     } else if (res.needBytes) {
                         // swap last and curr buffers - on next iteration new data is read into old last and last is the old curr
-                        ;[lastU8] = [currU8]
+                        const oldLastU8 = lastU8
+                        lastU8 = currU8
+                        currU8 = oldLastU8
                         break
                     }
                     const entry = res.entry
@@ -376,15 +389,26 @@ export default class PersistedLog {
                         this.initGlobalLogEntry(entry as GlobalLogEntry, entryOffset)
                     }
                     u8BytesRead += entry!.byteLength()
+                    // if entry ended exactly at the end of buffer then swap buffers
+                    if (u8BytesRead === ret.bytesRead) {
+                        const oldLastU8 = lastU8
+                        lastU8 = currU8
+                        currU8 = oldLastU8
+                    }
                 }
 
                 bytesRead += ret.bytesRead
                 // if we did not read requested bytes then end of file reached
                 if (ret.bytesRead < checkpontInterval) {
+                    if (u8BytesRead !== ret.bytesRead) {
+                        console.error(
+                            `u8BytesRead=${u8BytesRead}, bytesRead=${bytesRead}, ret.bytesRead=${ret.bytesRead}`,
+                        )
+                        throw new Error("reached end of file but did not read all bytes")
+                    }
                     break
                 }
             }
-
             this.byteLength = bytesRead
         } finally {
             if (fh !== null) {

@@ -147,9 +147,28 @@ export type PersistLogArgs = {
 export const GLOBAL_LOG_CHECKPOINT_INTERVAL = 128 * 1024
 
 /**
+ * Length of GlobalLogCheckpoint entry which must be fixed
+ * - 1 byte entry type
+ * - 2 byte lastEntryOffset
+ * - 2 byte lastEntryLength
+ * - 4 byte cksum
+ */
+export const GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH = 9
+
+/**
  * Write a checkpoint entry to the log at the beginning of every 128KB block
  */
 export const LOG_LOG_CHECKPOINT_INTERVAL = 128 * 1024
+
+/**
+ * Length of LogLogCheckpoint entry which must be fixed
+ * - 1 byte entry type
+ * - 2 byte lastEntryOffset
+ * - 2 byte lastEntryLength
+ * - 4 byte lastConfigOffset
+ * - 4 byte cksum
+ */
+export const LOG_LOG_CHECKPOINT_BYTE_LENGTH = 13
 
 /**
  * Global logs have a prefix of 27 bytes

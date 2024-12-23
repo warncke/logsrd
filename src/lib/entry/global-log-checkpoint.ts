@@ -1,6 +1,6 @@
 import { crc32 } from "@node-rs/crc32"
 
-import { EntryType } from "../globals"
+import { EntryType, GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH } from "../globals"
 import LogEntry from "./log-entry"
 
 const TYPE_BYTE = new Uint8Array([EntryType.GLOBAL_LOG_CHECKPOINT])
@@ -34,8 +34,7 @@ export default class GlobalLogCheckpoint extends LogEntry {
     }
 
     byteLength(): number {
-        // 1 byte type + 4 byte cksum + 2 byte lastEntryOffset + 2 byte lastEntryLength
-        return 9
+        return GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH
     }
 
     cksum(): number {

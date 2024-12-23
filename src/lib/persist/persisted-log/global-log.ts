@@ -4,7 +4,13 @@ import GlobalLogCheckpoint from "../../entry/global-log-checkpoint"
 import GlobalLogEntry from "../../entry/global-log-entry"
 import GlobalLogEntryFactory from "../../entry/global-log-entry-factory"
 import LogLogEntry from "../../entry/log-log-entry"
-import { GLOBAL_LOG_CHECKPOINT_INTERVAL, IOOperationType, PersistLogArgs, ReadIOOperation } from "../../globals"
+import {
+    GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH,
+    GLOBAL_LOG_CHECKPOINT_INTERVAL,
+    IOOperationType,
+    PersistLogArgs,
+    ReadIOOperation,
+} from "../../globals"
 import LogId from "../../log-id"
 import GlobalLogIOQueue from "../io/global-log-io-queue"
 import IOOperation from "../io/io-operation"
@@ -65,14 +71,49 @@ export default class GlobalLog extends PersistedLog {
         offset: number,
         length: number,
     ): Promise<[GlobalLogEntry, number]> {
-        const u8 = new Uint8Array(length)
-        const { bytesRead } = await fh.read({ buffer: u8, position: offset, length })
-        if (bytesRead !== length) {
+        let nextCheckpointOffset =
+            offset > GLOBAL_LOG_CHECKPOINT_INTERVAL
+                ? offset % GLOBAL_LOG_CHECKPOINT_INTERVAL === 0
+                    ? offset
+                    : offset - (offset % GLOBAL_LOG_CHECKPOINT_INTERVAL) + GLOBAL_LOG_CHECKPOINT_INTERVAL
+                : GLOBAL_LOG_CHECKPOINT_INTERVAL
+        let u8, bytesRead
+        // this should never happen because entry should never be written at a checkpoint boundary
+        if (offset === nextCheckpointOffset) {
+            throw new Error(`entry at checkpoint offset=${offset} length=${length}`)
+        }
+        // if entry crosses a checkpoint then we need to read past the checkpoint and combine the entry data around it
+        else if (offset < nextCheckpointOffset && offset + length > nextCheckpointOffset) {
+            length += GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH
+            u8 = new Uint8Array(length)
+            ;({ bytesRead } = await fh.read({ buffer: u8, position: offset, length }))
+            if (bytesRead !== length) {
+                throw new Error(
+                    `bytesRead error log=${this.logName()} entryNum=${entryNum} offset=${offset} length=${length} bytesRead=${bytesRead}`,
+                )
+            }
+            const checkpointOffset = nextCheckpointOffset - offset
+            u8 = Buffer.concat([
+                u8.slice(0, checkpointOffset),
+                u8.slice(checkpointOffset + GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH),
+            ])
+        } else {
+            u8 = new Uint8Array(length)
+            ;({ bytesRead } = await fh.read({ buffer: u8, position: offset, length }))
+            if (bytesRead !== length) {
+                throw new Error(
+                    `bytesRead error log=${this.logName()} entryNum=${entryNum} offset=${offset} length=${length} bytesRead=${bytesRead}`,
+                )
+            }
+        }
+        let entry
+        try {
+            entry = GlobalLogEntryFactory.fromU8(u8)
+        } catch (err) {
             throw new Error(
-                `bytesRead error log=${this.logName()} entryNum=${entryNum} offset=${offset} length=${length} bytesRead=${bytesRead}`,
+                `error reading entry log=${this.logName()} logId=${logId.base64()} entryNum=${entryNum} offset=${offset} length=${length}`,
             )
         }
-        const entry = GlobalLogEntryFactory.fromU8(u8)
         if (entry.logId.base64() !== logId.base64()) {
             throw new Error(
                 `logId mismatch log=${this.logName()} logId=${logId.base64()} entry.logId=${entry.logId.base64()} entryNum=${entryNum} offset=${offset} length=${length}`,
@@ -139,21 +180,18 @@ export default class GlobalLog extends PersistedLog {
                         entry: logEntry,
                     })
                 }
-                // total length of file with scheduled writes
-                const writtenLength = this.byteLength + writeBytes
                 let nextCheckpointOffset =
-                    writtenLength > GLOBAL_LOG_CHECKPOINT_INTERVAL
-                        ? writtenLength -
-                          (writtenLength % GLOBAL_LOG_CHECKPOINT_INTERVAL) +
-                          GLOBAL_LOG_CHECKPOINT_INTERVAL
+                    entryOffset > GLOBAL_LOG_CHECKPOINT_INTERVAL
+                        ? entryOffset % GLOBAL_LOG_CHECKPOINT_INTERVAL === 0
+                            ? entryOffset
+                            : entryOffset -
+                              (entryOffset % GLOBAL_LOG_CHECKPOINT_INTERVAL) +
+                              GLOBAL_LOG_CHECKPOINT_INTERVAL
                         : GLOBAL_LOG_CHECKPOINT_INTERVAL
                 // if this entry would cross a checkpoint boundary then add checkpoint
-                if (
-                    writtenLength < nextCheckpointOffset &&
-                    writtenLength + logEntry.byteLength() > nextCheckpointOffset
-                ) {
+                if (entryOffset < nextCheckpointOffset && entryOffset + logEntry.byteLength() > nextCheckpointOffset) {
                     // length of buffer segment to write before checkpoint
-                    const lastEntryOffset = nextCheckpointOffset - writtenLength
+                    const lastEntryOffset = nextCheckpointOffset - entryOffset
                     const checkpointEntry = new GlobalLogCheckpoint({
                         lastEntryOffset,
                         lastEntryLength: logEntry.byteLength(),
@@ -175,10 +213,9 @@ export default class GlobalLog extends PersistedLog {
                     )
                     u8s.push(endU8)
                     writeBytes += logEntry.byteLength() - lastEntryOffset
-                } else if (
-                    writtenLength > GLOBAL_LOG_CHECKPOINT_INTERVAL &&
-                    writtenLength % GLOBAL_LOG_CHECKPOINT_INTERVAL === 0
-                ) {
+                }
+                // if we are exactly at checkpoint boundary then add a checkpoint
+                else if (entryOffset === nextCheckpointOffset) {
                     // create checkpoint entry
                     // TODO: real offset?
                     const checkpointEntry = new GlobalLogCheckpoint({
@@ -188,8 +225,14 @@ export default class GlobalLog extends PersistedLog {
                     // add checkpoint entry
                     u8s.push(...checkpointEntry.u8s())
                     writeBytes += checkpointEntry.byteLength()
+                    // need to update the offset to include the checkpoint entry
+                    if (logOpInfo !== null) {
+                        logOpInfo.ops.at(-1)!.offset += checkpointEntry.byteLength()
+                    }
+                    // add entry
+                    u8s.push(...logEntry.u8s())
+                    writeBytes += logEntry.byteLength()
                 }
-                // if we are exactly at checkpoint boundary then add a checkpoint
                 // otherwise add entry
                 else {
                     u8s.push(...logEntry.u8s())
@@ -209,15 +252,17 @@ export default class GlobalLog extends PersistedLog {
                 try {
                     if (ret.bytesWritten > 0) {
                         await this.truncate(this.byteLength)
-                        process.exit(1)
                     }
                 } catch (err) {
                     // we are in a corrupted state here but still need this to be correct
                     this.byteLength += ret.bytesWritten
                     throw new Error(
-                        `Failed to write all bytes. log=${this.logName()} expected=${writeBytes} actual=${ret.bytesWritten}`,
+                        `Truncate failed after failed to write all bytes. log=${this.logName()} expected=${writeBytes} actual=${ret.bytesWritten}`,
                     )
                 }
+                throw new Error(
+                    `Failed to write all bytes. log=${this.logName()} expected=${writeBytes} actual=${ret.bytesWritten}`,
+                )
             }
 
             for (const opInfo of globalOps) {
