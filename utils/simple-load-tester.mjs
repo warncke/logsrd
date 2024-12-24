@@ -1,5 +1,9 @@
 import { Pool, request } from "undici"
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 run().catch((err) => console.error(err.message, err.stack))
 
 async function run() {
@@ -9,12 +13,14 @@ async function run() {
     let appendErrors = 0
     let headRequests = 0
     let headErrors = 0
+    let entriesRequests = 0
+    let entriesErrors = 0
 
     const start = Date.now()
 
     let results = []
 
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 1000; i++) {
         results.push(testIteration())
     }
 
@@ -29,6 +35,8 @@ async function run() {
         appendErrors += result.appendErrors
         headRequests += result.headRequests
         headErrors += result.headErrors
+        entriesRequests += result.entriesRequests
+        entriesErrors += result.entriesErrors
     }
 
     const seconds = time / 1000
@@ -40,13 +48,15 @@ async function run() {
     console.log(`${appendErrors} append  errors`)
     console.log(`${headRequests} head requests in ${seconds} seconds`)
     console.log(`${headErrors} head  errors`)
+    console.log(`${entriesRequests} entries requests in ${seconds} seconds`)
+    console.log(`${entriesErrors} entries  errors`)
     console.log(`${requestsPerSecond} requests per second`)
 }
 
 async function testIteration() {
     const dispatcher = new Pool("http://127.0.0.1:7000", {
         pipelining: 10,
-        connections: 10,
+        connections: 4,
         connect: {
             rejectUnauthorized: false,
         },
@@ -58,6 +68,8 @@ async function testIteration() {
         appendErrors: 0,
         headRequests: 0,
         headErrors: 0,
+        entriesRequests: 0,
+        entriesErrors: 0,
     }
     stats.createLogRequests++
     const { statusCode, body } = await request("http://127.0.0.1:7000/log", {
@@ -75,7 +87,7 @@ async function testIteration() {
 
     const config = await body.json()
 
-    for (let entryNum = 0; entryNum < 1000; entryNum++) {
+    for (let entryNum = 0; entryNum < 200; entryNum++) {
         const { statusCode, body } = await request(`http://127.0.0.1:7000/log/${config.logId}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -83,6 +95,8 @@ async function testIteration() {
             dispatcher,
         })
         stats.appendRequests++
+
+        await sleep(100)
 
         if (statusCode !== 200) {
             stats.appendErrors++
@@ -110,6 +124,32 @@ async function testIteration() {
             if (head.entryNum !== entryNum) {
                 stats.headErrors++
             }
+        }
+    }
+
+    for (let offset = 1; offset < 200; offset += 100) {
+        const { statusCode, body } = await request(
+            `http://127.0.0.1:7000/log/${config.logId}/entries?offset=${offset}`,
+            { dispatcher },
+        )
+        stats.entriesRequests++
+
+        if (statusCode !== 200) {
+            stats.entriesErrors++
+            console.error(await body.text())
+            return stats
+        }
+
+        const entries = await body.json()
+
+        let entryNum = offset - 1
+        for (const entry of entries) {
+            if (entry.entryNum !== entryNum) {
+                stats.entriesErrors++
+                console.log("Entries error", config.logId, offset, entryNum, entry)
+                break
+            }
+            entryNum++
         }
     }
 

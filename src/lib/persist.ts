@@ -110,8 +110,8 @@ import HotLog from "./persist/persisted-log/hot-log"
 export type PersistConfig = {
     dataDir: string
     pageSize: number
-    diskCompactThreshold: number
-    memCompactThreshold: number
+    globalIndexCountLimit: number
+    globalIndexSizeLimit: number
     coldLogFileName?: string
     hotLogFileName?: string
     blobDir?: string
@@ -127,6 +127,8 @@ export default class Persist {
     oldHotLog: HotLog
     newHotLog: HotLog
     logs: Map<string, PersistLog>
+    emptyOldHotLogInProgress: Promise<void> | null = null
+    moveNewToOldHotLogInProgress: Promise<void> | null = null
 
     constructor(config: PersistConfig) {
         config.coldLogFileName = config.coldLogFileName || DEFAULT_COLD_LOG_FILE_NAME
@@ -164,6 +166,50 @@ export default class Persist {
         await this.coldLog.init()
         await this.oldHotLog.init()
         await this.newHotLog.init()
+        // run monitor immediately
+        this.monitor()
+        // run monitor every 10 seconds
+        setInterval(() => this.monitor(), 10000)
+    }
+
+    monitor() {
+        if (this.emptyOldHotLogInProgress !== null) {
+            return
+        }
+        if (this.moveNewToOldHotLogInProgress !== null) {
+            return
+        }
+        const entryCounts = this.globalIndexEntryCounts()
+        console.log(entryCounts)
+        if (entryCounts.oldHotLog > 0) {
+            this.emptyOldHotLogInProgress = this.emptyOldHotLog()
+                .catch((err) => console.error("emptyOldHotLog error", err))
+                .then(() => {
+                    this.emptyOldHotLogInProgress = null
+                })
+        } else if (entryCounts.newHotLog > this.config.globalIndexCountLimit) {
+            this.moveNewToOldHotLogInProgress = this.moveNewToOldHotLog()
+                .catch((err) => console.error("moveNewToOldHotLog error", err))
+                .then(() => {
+                    this.moveNewToOldHotLogInProgress = null
+                })
+        }
+    }
+
+    globalIndexEntryCounts() {
+        const entryCounts = {
+            newHotLog: 0,
+            oldHotLog: 0,
+            coldLog: 0,
+        }
+
+        for (const log of this.logs.values()) {
+            entryCounts.newHotLog += log.newHotLogEntryCount()
+            entryCounts.oldHotLog += log.oldHotLogEntryCount()
+            entryCounts.coldLog += log.coldLogEntryCount()
+        }
+
+        return entryCounts
     }
 
     async emptyOldHotLog(): Promise<void> {

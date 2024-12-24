@@ -41,6 +41,10 @@ export default class LogIndex {
         return this.en
     }
 
+    entryCount(): number {
+        return this.en.length / 3
+    }
+
     appendIndex(index: LogIndex) {
         // if appended index has more recent config then update
         if (index.lcNum !== null && (this.lcNum === null || index.lcNum > this.lcNum)) {

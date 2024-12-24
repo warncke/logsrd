@@ -29,8 +29,8 @@ async function run(): Promise<void> {
     const persist = new Persist({
         dataDir,
         pageSize: 4096,
-        diskCompactThreshold: 1024 ** 2,
-        memCompactThreshold: 1024 ** 2 * 100,
+        globalIndexCountLimit: 100_000,
+        globalIndexSizeLimit: 1024 * 1024 * 100,
     })
 
     await persist.init()

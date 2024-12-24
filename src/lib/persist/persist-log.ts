@@ -488,6 +488,22 @@ export default class PersistLog {
         this.logLogIndex.addEntry(entry, entryNum, entryOffset, length)
     }
 
+    newHotLogEntryCount(): number {
+        return this.newHotLogIndex === null ? 0 : this.newHotLogIndex.entryCount()
+    }
+
+    oldHotLogEntryCount(): number {
+        return this.oldHotLogIndex === null ? 0 : this.oldHotLogIndex.entryCount()
+    }
+
+    coldLogEntryCount(): number {
+        return this.coldLogIndex === null ? 0 : this.coldLogIndex.entryCount()
+    }
+
+    logLogEntryCount(): number {
+        return this.logLogIndex === null ? 0 : this.logLogIndex.entryCount()
+    }
+
     filename() {
         return path.join(this.persist.config.logDir!, this.logId.logDirPrefix(), `${this.logId.base64()}.log`)
     }
