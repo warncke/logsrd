@@ -1,4 +1,4 @@
-import { EntryType, LOG_LOG_PREFIX_BYTE_LENGTH } from "../globals"
+import { EntryType, LOG_LOG_PREFIX_BYTE_LENGTH, MAX_ENTRY_SIZE } from "../globals"
 import LogEntry from "./log-entry"
 import LogEntryFactory from "./log-entry-factory"
 import LogLogEntry from "./log-log-entry"
@@ -25,6 +25,9 @@ export default class LogLogEntryFactory {
         if (entryType === EntryType.LOG_LOG) {
             // get entry length
             const entryLength = LogLogEntryFactory.entryLengthFromU8(u8)
+            if (entryLength > MAX_ENTRY_SIZE) {
+                return { err: new Error(`Invalid entryLength: ${entryLength}`) }
+            }
             const totalLength = entryLength + LOG_LOG_PREFIX_BYTE_LENGTH
             if (u8.length < totalLength) {
                 return { needBytes: totalLength - u8.length }
