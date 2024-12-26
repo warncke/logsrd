@@ -1,8 +1,6 @@
 import BinaryLogEntry from "./entry/binary-log-entry"
 import CommandLogEntry from "./entry/command-log-entry"
-import BeginCompactColdCommand from "./entry/command/begin-compact-cold-command"
 import CreateLogCommand from "./entry/command/create-log-command"
-import FinishCompactColdCommand from "./entry/command/finish-compact-cold-command"
 import SetConfigCommand from "./entry/command/set-config-command"
 import GlobalLogCheckpoint from "./entry/global-log-checkpoint"
 import GlobalLogEntry from "./entry/global-log-entry"
@@ -34,21 +32,13 @@ export const MAX_RESPONSE_ENTRIES = 100
 export const enum CommandName {
     CREATE_LOG,
     SET_CONFIG,
-    BEGIN_COMPACT_COLD,
-    FINISH_COMPACT_COLD,
 }
 
-export type COMMAND_CLASSES =
-    | typeof CreateLogCommand
-    | typeof SetConfigCommand
-    | typeof BeginCompactColdCommand
-    | typeof FinishCompactColdCommand
+export type COMMAND_CLASSES = typeof CreateLogCommand | typeof SetConfigCommand
 
 export const COMMAND_CLASS: { [index: number]: COMMAND_CLASSES } = {
     [CommandName.CREATE_LOG]: CreateLogCommand,
     [CommandName.SET_CONFIG]: SetConfigCommand,
-    [CommandName.BEGIN_COMPACT_COLD]: BeginCompactColdCommand,
-    [CommandName.FINISH_COMPACT_COLD]: FinishCompactColdCommand,
 }
 
 /**
