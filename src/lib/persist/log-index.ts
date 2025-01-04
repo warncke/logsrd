@@ -31,7 +31,9 @@ export default class LogIndex {
 
     entry(entryNum: number): [number, number, number] {
         if (entryNum < this.en[0] || entryNum > this.en.at(-3)!) {
-            throw new Error("entry not in index")
+            throw new Error(
+                `entry not in index entryNum=${entryNum} minEntryNum=${this.en[0]} maxEntryNum=${this.en.at(-3)}`,
+            )
         }
         const indexOffset = (entryNum - this.en[0]) * 3
         return [this.en[indexOffset], this.en[indexOffset + 1], this.en[indexOffset + 2]]

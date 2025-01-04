@@ -34,28 +34,23 @@ type LogOpInfo = {
 export default class GlobalLog extends PersistedLog {
     maxReadFHs: number = 16
     ioQueue = new GlobalLogIOQueue()
-    isColdLog: boolean = false
     isOldHotLog: boolean = false
     isNewHotLog: boolean = false
 
     constructor({
-        isColdLog = false,
         isNewHotLog = false,
         isOldHotLog = false,
         logFile,
         ...args
-    }: PersistLogArgs & { isColdLog?: boolean; isNewHotLog?: boolean; isOldHotLog?: boolean; logFile: string }) {
+    }: PersistLogArgs & { isNewHotLog?: boolean; isOldHotLog?: boolean; logFile: string }) {
         super(args)
-        this.isColdLog = isColdLog
         this.isNewHotLog = isNewHotLog
         this.isOldHotLog = isOldHotLog
         this.logFile = logFile
     }
 
     logName(): string {
-        if (this.isColdLog) {
-            return "cold"
-        } else if (this.isOldHotLog) {
+        if (this.isOldHotLog) {
             return "oldHot"
         } else if (this.isNewHotLog) {
             return "newHot"
@@ -307,8 +302,6 @@ export default class GlobalLog extends PersistedLog {
         const persistLog = this.persist.getLog(entry.logId)
         if (this.isNewHotLog) {
             persistLog.addNewHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
-        } else if (this.isColdLog) {
-            persistLog.addColdLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         } else if (this.isOldHotLog) {
             persistLog.addOldHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         } else {

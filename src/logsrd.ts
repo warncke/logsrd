@@ -29,7 +29,7 @@ async function run(): Promise<void> {
     const persist = new Persist({
         dataDir,
         pageSize: 4096,
-        globalIndexCountLimit: 100_000,
+        globalIndexCountLimit: 10,
         globalIndexSizeLimit: 1024 * 1024 * 100,
     })
 

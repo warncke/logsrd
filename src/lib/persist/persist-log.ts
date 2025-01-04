@@ -6,7 +6,6 @@ import CreateLogCommand from "../entry/command/create-log-command"
 import GlobalLogEntry from "../entry/global-log-entry"
 import LogEntry from "../entry/log-entry"
 import LogLogEntry from "../entry/log-log-entry"
-import { GLOBAL_LOG_PREFIX_BYTE_LENGTH, LOG_LOG_PREFIX_BYTE_LENGTH } from "../globals"
 import LogConfig from "../log-config"
 import LogId from "../log-id"
 import Persist from "../persist"
@@ -24,7 +23,6 @@ import PersistedLog from "./persisted-log/persisted-log"
 export default class PersistLog {
     persist: Persist
     logId: LogId
-    coldLogIndex: GlobalLogIndex | null = null
     newHotLogIndex: GlobalLogIndex | null = null
     oldHotLogIndex: GlobalLogIndex | null = null
     logLogIndex: LogLogIndex | null = null
@@ -111,58 +109,54 @@ export default class PersistLog {
         await this.getLog()
         const oldEntries = this.oldHotLogIndex.entries()
         const moveEntries = []
-        let entryByteLength = 0
-        const coldLogMaxEntryNum =
-            this.logLogIndex !== null && this.logLogIndex.hasEntries() ? this.logLogIndex.maxEntryNum() : -1
         const logLogMaxEntryNum =
             this.logLogIndex !== null && this.logLogIndex.hasEntries() ? this.logLogIndex.maxEntryNum() : -1
 
         for (let i = 0; i + 2 < oldEntries.length; i += 3) {
             const entryNum = oldEntries[i]
-            const offset = oldEntries[i + 1]
-            const length = oldEntries[i + 2]
-            // skip entries that are already persisted to cold or log logs
-            if (entryNum <= coldLogMaxEntryNum || entryNum <= logLogMaxEntryNum) {
+            // skip entries that are already persisted to log log
+            if (entryNum <= logLogMaxEntryNum) {
                 continue
             }
             moveEntries.push(entryNum)
-            entryByteLength += length - GLOBAL_LOG_PREFIX_BYTE_LENGTH + LOG_LOG_PREFIX_BYTE_LENGTH
         }
-        // if there is nothing to move then remove index and finish
-        if (moveEntries.length === 0) {
-            this.oldHotLogIndex = null
-            return
-        }
-        // TODO: make this incremental if there are a large number of entries
-        const op = await this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex, moveEntries)
-        if (op.entries === null) {
-            throw new Error("entries is null")
-        }
-        // if there is at least pageSize of entries move to log log
-        const moveToLogLog = entryByteLength > this.persist.config.pageSize
-        if (moveToLogLog) {
+        // move any entries
+        if (moveEntries.length > 0) {
+            // TODO: make this incremental if there are a large number of entries
+            const op = await this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex, moveEntries)
+            if (op.entries === null) {
+                throw new Error("entries is null")
+            }
             const ops = op.entries.map((entry) => this.appendOp(this.logLog!, entry.entry, entry.entryNum))
             await Promise.all(ops)
-        }
-        // otherwise move to cold log
-        else {
-            const ops = op.entries.map((entry) => this.appendOp(this.persist.coldLog, entry.entry, entry.entryNum))
-            await Promise.all(ops)
-        }
-        // get/delete any current ops queued for old hot log
-        const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
-        // reassign ops to correct log
-        if (logQueue !== null) {
-            while (logQueue.opPending()) {
-                const [reads] = logQueue.getReady()
-                for (const op of reads) {
-                    if (moveToLogLog) {
+            // get/delete any current ops queued for old hot log
+            const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
+            // reassign ops to correct log
+            if (logQueue !== null) {
+                while (logQueue.opPending()) {
+                    const [reads, writes] = logQueue.getReady()
+                    for (const op of reads) {
                         // reassign index for op - TODO: fix type hack
                         ;(op as ReadHeadIOOperation).index = this.logLogIndex!
                         this.logLog!.enqueueOp(op)
-                    } else {
-                        ;(op as ReadHeadIOOperation).index = this.coldLogIndex!
-                        this.persist.coldLog.enqueueOp(op)
+                    }
+                    for (const op of writes) {
+                        op.completeWithError(new Error("write on old hot log"))
+                    }
+                }
+            }
+        } else {
+            // if there were no entries to move there should not be anything queued
+            const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
+            // reassign ops to correct log
+            if (logQueue !== null) {
+                while (logQueue.opPending()) {
+                    const [reads, writes] = logQueue.getReady()
+                    for (const op of reads) {
+                        op.completeWithError(new Error("read after empty on old hot log"))
+                    }
+                    for (const op of writes) {
+                        op.completeWithError(new Error("write on old hot log"))
                     }
                 }
             }
@@ -241,8 +235,6 @@ export default class PersistLog {
             return true
         } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
             return true
-        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasConfig()) {
-            return true
         } else {
             return false
         }
@@ -267,13 +259,6 @@ export default class PersistLog {
                 return [this.logLog!, this.logLogIndex!]
             } else {
                 return [this.persist.oldHotLog, this.oldHotLogIndex]
-            }
-        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasConfig()) {
-            const [configEntryNum] = this.coldLogIndex.lastConfig()
-            if (logLogConfigEntryNum !== null && logLogConfigEntryNum >= configEntryNum) {
-                return [this.logLog!, this.logLogIndex!]
-            } else {
-                return [this.persist.coldLog, this.coldLogIndex]
             }
         } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
             return [this.logLog!, this.logLogIndex]
@@ -318,13 +303,6 @@ export default class PersistLog {
             } else {
                 return [this.persist.oldHotLog, this.oldHotLogIndex]
             }
-        } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntries()) {
-            const [headEntryNum] = this.coldLogIndex.lastEntry()
-            if (logLogHeadEntryNum !== null && logLogHeadEntryNum >= headEntryNum) {
-                return [this.logLog!, this.logLogIndex!]
-            } else {
-                return [this.persist.coldLog, this.coldLogIndex]
-            }
         } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
             return [this.logLog!, this.logLogIndex]
         } else {
@@ -338,7 +316,6 @@ export default class PersistLog {
         const entryNumIndexes = entryNums.map((entryNum, index) => [entryNum, index]).sort((a, b) => a[0] - b[0])
         // entryNums may be spread across different logs files
         const logLogEntries = []
-        const coldLogEntries = []
         const oldHotLogEntries = []
         const newHotLogEntries = []
         // assign each entry to log it should be read from
@@ -346,8 +323,6 @@ export default class PersistLog {
             const [entryNum] = entryNumIndexes[i]
             if (this.logLogIndex !== null && this.logLogIndex.hasEntry(entryNum)) {
                 logLogEntries.push(entryNum)
-            } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntry(entryNum)) {
-                coldLogEntries.push(entryNum)
             } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntry(entryNum)) {
                 oldHotLogEntries.push(entryNum)
             } else if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntry(entryNum)) {
@@ -360,9 +335,6 @@ export default class PersistLog {
         let ops = []
         if (logLogEntries.length > 0) {
             ops.push(this.readEntriesOp(this.logLog!, this.logLogIndex!, logLogEntries))
-        }
-        if (coldLogEntries.length > 0) {
-            ops.push(this.readEntriesOp(this.persist.coldLog, this.coldLogIndex!, coldLogEntries))
         }
         if (oldHotLogEntries.length > 0) {
             ops.push(this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex!, oldHotLogEntries))
@@ -394,7 +366,6 @@ export default class PersistLog {
     async getEntries(offset: number, limit: number): Promise<Array<GlobalLogEntry | LogLogEntry>> {
         // entryNums may be spread across different logs files
         const logLogEntries = []
-        const coldLogEntries = []
         const oldHotLogEntries = []
         const newHotLogEntries = []
         // perform read ops on each log that has entries
@@ -403,8 +374,6 @@ export default class PersistLog {
             const entryNum = offset + i
             if (this.logLogIndex !== null && this.logLogIndex.hasEntry(entryNum)) {
                 logLogEntries.push(entryNum)
-            } else if (this.coldLogIndex !== null && this.coldLogIndex.hasEntry(entryNum)) {
-                coldLogEntries.push(entryNum)
             } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntry(entryNum)) {
                 oldHotLogEntries.push(entryNum)
             } else if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntry(entryNum)) {
@@ -421,9 +390,6 @@ export default class PersistLog {
         let ops = []
         if (logLogEntries.length > 0) {
             ops.push(this.readEntriesOp(this.logLog!, this.logLogIndex!, logLogEntries))
-        }
-        if (coldLogEntries.length > 0) {
-            ops.push(this.readEntriesOp(this.persist.coldLog, this.coldLogIndex!, coldLogEntries))
         }
         if (oldHotLogEntries.length > 0) {
             ops.push(this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex!, oldHotLogEntries))
@@ -474,13 +440,6 @@ export default class PersistLog {
         this.oldHotLogIndex.addEntry(entry, entryNum, entryOffset, length)
     }
 
-    addColdLogEntry(entry: LogEntry, entryNum: number, entryOffset: number, length: number) {
-        if (this.coldLogIndex === null) {
-            this.coldLogIndex = new GlobalLogIndex()
-        }
-        this.coldLogIndex.addEntry(entry, entryNum, entryOffset, length)
-    }
-
     addLogLogEntry(entry: LogEntry, entryNum: number, entryOffset: number, length: number) {
         if (this.logLogIndex === null) {
             this.logLogIndex = new LogLogIndex()
@@ -496,15 +455,14 @@ export default class PersistLog {
         return this.oldHotLogIndex === null ? 0 : this.oldHotLogIndex.entryCount()
     }
 
-    coldLogEntryCount(): number {
-        return this.coldLogIndex === null ? 0 : this.coldLogIndex.entryCount()
-    }
-
     logLogEntryCount(): number {
         return this.logLogIndex === null ? 0 : this.logLogIndex.entryCount()
     }
 
     filename() {
+        if (this.logId.logDirPrefix() !== LogId.newFromBase64(this.logId.base64()).logDirPrefix()) {
+            console.error("logId mismatch", this.logId, this.logId.logId.buffer)
+        }
         return path.join(this.persist.config.logDir!, this.logId.logDirPrefix(), `${this.logId.base64()}.log`)
     }
 }
