@@ -86,17 +86,21 @@ export default class PersistLog {
         const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
         // reassign ops to correct log
         if (logQueue !== null) {
-            while (logQueue.opPending()) {
-                const [reads, writes] = logQueue.getReady()
-                for (const op of reads) {
-                    // reads stay on old hot log but need the correct index
-                    ;(op as ReadHeadIOOperation).index = this.oldHotLogIndex!
-                    this.persist.oldHotLog.ioQueue.enqueue(op)
+            const [reads, writes] = logQueue.drain()
+            for (const op of reads) {
+                if (op.processing) {
+                    console.error("read op already processing", op)
                 }
-                for (const op of writes) {
-                    // writes got to new hot log
-                    this.persist.newHotLog.ioQueue.enqueue(op)
+                // reads stay on old hot log but need the correct index
+                ;(op as ReadHeadIOOperation).index = this.oldHotLogIndex!
+                this.persist.oldHotLog.ioQueue.enqueue(op)
+            }
+            for (const op of writes) {
+                if (op.processing) {
+                    console.error("write op already processing", op)
                 }
+                // writes got to new hot log
+                this.persist.newHotLog.ioQueue.enqueue(op)
             }
         }
     }
@@ -133,16 +137,20 @@ export default class PersistLog {
             const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
             // reassign ops to correct log
             if (logQueue !== null) {
-                while (logQueue.opPending()) {
-                    const [reads, writes] = logQueue.getReady()
-                    for (const op of reads) {
-                        // reassign index for op - TODO: fix type hack
-                        ;(op as ReadHeadIOOperation).index = this.logLogIndex!
-                        this.logLog!.enqueueOp(op)
+                const [reads, writes] = logQueue.drain()
+                for (const op of reads) {
+                    if (op.processing) {
+                        console.error("read op already processing", op)
                     }
-                    for (const op of writes) {
-                        op.completeWithError(new Error("write on old hot log"))
+                    // reassign index for op - TODO: fix type hack
+                    ;(op as ReadHeadIOOperation).index = this.logLogIndex!
+                    this.logLog!.enqueueOp(op)
+                }
+                for (const op of writes) {
+                    if (op.processing) {
+                        console.error("write op already processing", op)
                     }
+                    op.completeWithError(new Error("write on old hot log"))
                 }
             }
         } else {
@@ -150,14 +158,18 @@ export default class PersistLog {
             const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
             // reassign ops to correct log
             if (logQueue !== null) {
-                while (logQueue.opPending()) {
-                    const [reads, writes] = logQueue.getReady()
-                    for (const op of reads) {
-                        op.completeWithError(new Error("read after empty on old hot log"))
+                const [reads, writes] = logQueue.drain()
+                for (const op of reads) {
+                    if (op.processing) {
+                        console.error("read op already processing", op)
                     }
-                    for (const op of writes) {
-                        op.completeWithError(new Error("write on old hot log"))
+                    op.completeWithError(new Error("read after empty on old hot log"))
+                }
+                for (const op of writes) {
+                    if (op.processing) {
+                        console.error("write op already processing", op)
                     }
+                    op.completeWithError(new Error("write on old hot log"))
                 }
             }
         }

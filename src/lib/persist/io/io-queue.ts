@@ -81,6 +81,71 @@ export default class IOQueue {
         }
     }
 
+    drain(): [ReadIOOperation[], WriteIOOperation[]] {
+        const readOps: ReadIOOperation[] = []
+        const writeOps: WriteIOOperation[] = []
+
+        if (this.oldQueue !== null) {
+            for (let i = 0; i < this.oldQueue.length; i++) {
+                const op = this.oldQueue[i]
+                // skip ops that are already complete
+                if (op.processing && op.endTime > 0) {
+                    continue
+                }
+                // item is read
+                if (
+                    op.op in
+                    [
+                        IOOperationType.READ_HEAD,
+                        IOOperationType.READ_RANGE,
+                        IOOperationType.READ_ENTRIES,
+                        IOOperationType.READ_CONFIG,
+                    ]
+                ) {
+                    readOps.push(op as ReadIOOperation)
+                }
+                // item is write
+                else if (op.op === IOOperationType.WRITE) {
+                    writeOps.push(op as WriteIOOperation)
+                } else {
+                    throw new Error("unknown op type")
+                }
+            }
+        }
+        if (this.newQueue !== null) {
+            for (let i = 0; i < this.newQueue.length; i++) {
+                const op = this.newQueue[i]
+                // skip ops that are already complete
+                if (op.processing && op.endTime > 0) {
+                    continue
+                }
+                // item is read
+                if (
+                    op.op in
+                    [
+                        IOOperationType.READ_HEAD,
+                        IOOperationType.READ_RANGE,
+                        IOOperationType.READ_ENTRIES,
+                        IOOperationType.READ_CONFIG,
+                    ]
+                ) {
+                    readOps.push(op as ReadIOOperation)
+                }
+                // item is write
+                else if (op.op === IOOperationType.WRITE) {
+                    writeOps.push(op as WriteIOOperation)
+                } else {
+                    throw new Error("unknown op type")
+                }
+            }
+        }
+
+        this.oldQueue = null
+        this.newQueue = []
+
+        return [readOps, writeOps]
+    }
+
     combineReadHeadOps(ops: ReadHeadIOOperation[]): ReadHeadIOOperation {
         const op = new ReadHeadIOOperation(ops[0].logId!, ops[0].index)
         op.reject = (err) => {
@@ -144,7 +209,7 @@ export default class IOQueue {
         }
     }
 
-    enqueue(item: IOOperation) {
-        this.newQueue.push(item)
+    enqueue(op: IOOperation) {
+        this.newQueue.push(op)
     }
 }

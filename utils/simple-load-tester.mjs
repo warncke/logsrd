@@ -88,68 +88,79 @@ async function testIteration() {
     const config = await body.json()
 
     for (let entryNum = 0; entryNum < 200; entryNum++) {
-        const { statusCode, body } = await request(`http://127.0.0.1:7000/log/${config.logId}`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: `{"entryNum":${entryNum}}`,
-            dispatcher,
-        })
-        stats.appendRequests++
+        try {
+            const { statusCode, body } = await request(`http://127.0.0.1:7000/log/${config.logId}`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: `{"entryNum":${entryNum}}`,
+                dispatcher,
+            })
+            stats.appendRequests++
+            if (statusCode !== 200) {
+                stats.appendErrors++
+                console.error(await body.text())
+                return stats
+            }
+        } catch (err) {
+            console.error(`Error appending entry ${config.logId} ${entryNum}`, err)
+        }
 
         await sleep(100)
 
-        if (statusCode !== 200) {
-            stats.appendErrors++
-            console.error(await body.text())
-            return stats
-        }
+        try {
+            const headRequests = Array(10)
+                .fill(null)
+                .map(() => request(`http://127.0.0.1:7000/log/${config.logId}/head`, { dispatcher }))
+            const headResponses = await Promise.all(headRequests)
 
-        const headRequests = Array(10)
-            .fill(null)
-            .map(() => request(`http://127.0.0.1:7000/log/${config.logId}/head`, { dispatcher }))
-        const headResponses = await Promise.all(headRequests)
+            for (const response of headResponses) {
+                const { statusCode, body } = response
+                stats.headRequests++
 
-        for (const response of headResponses) {
-            const { statusCode, body } = response
-            stats.headRequests++
+                if (statusCode !== 200) {
+                    stats.headErrors++
+                    console.error(await body.text())
+                    continue
+                }
 
-            if (statusCode !== 200) {
-                stats.headErrors++
-                console.error(await body.text())
-                continue
+                const head = await body.json()
+
+                if (head.entryNum !== entryNum) {
+                    stats.headErrors++
+                }
             }
-
-            const head = await body.json()
-
-            if (head.entryNum !== entryNum) {
-                stats.headErrors++
-            }
+        } catch (err) {
+            console.error(`Error getting head ${config.logId} ${entryNum}`, err)
         }
     }
 
     for (let offset = 1; offset < 200; offset += 100) {
-        const { statusCode, body } = await request(
-            `http://127.0.0.1:7000/log/${config.logId}/entries?offset=${offset}`,
-            { dispatcher },
-        )
-        stats.entriesRequests++
+        try {
+            const { statusCode, body } = await request(
+                `http://127.0.0.1:7000/log/${config.logId}/entries?offset=${offset}`,
+                { dispatcher },
+            )
+            stats.entriesRequests++
 
-        if (statusCode !== 200) {
-            stats.entriesErrors++
-            console.error(await body.text())
-            return stats
-        }
-
-        const entries = await body.json()
-
-        let entryNum = offset - 1
-        for (const entry of entries) {
-            if (entry.entryNum !== entryNum) {
+            if (statusCode !== 200) {
                 stats.entriesErrors++
-                console.log("Entries error", config.logId, offset, entryNum, entry)
-                break
+                console.error(await body.text())
+                return stats
             }
-            entryNum++
+
+            const entries = await body.json()
+
+            let entryNum = offset - 1
+            for (const entry of entries) {
+                if (entry.entryNum !== entryNum) {
+                    stats.entriesErrors++
+                    console.log("Entries error", config.logId, offset, entryNum, entry)
+                    break
+                }
+                entryNum++
+            }
+        } catch (err) {
+            console.error(`Error getting entries ${config.logId} ${offset}`, err)
         }
     }
 
