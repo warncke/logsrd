@@ -1,8 +1,10 @@
-import uWS, { HttpResponse } from "uWebSockets.js"
+import uWS from "uWebSockets.js"
 
 import { MAX_ENTRY_SIZE } from "./lib/globals"
 import LogId from "./lib/log-id"
 import Persist from "./lib/persist"
+import CreateLogRequest from "./lib/request/create-log-request"
+import HttpPostRequest from "./lib/request/http-post-request"
 import Server from "./lib/server"
 
 const dataDir = process.env.DATA_DIR || "./data"
@@ -46,7 +48,7 @@ async function run(): Promise<void> {
 
     /* Public Routes */
 
-    logsrd.post("/log", (res, req) => createLog(server, res, req))
+    logsrd.post("/log", (res, req) => new CreateLogRequest(server, new HttpPostRequest(req, res)).process())
     logsrd.post("/log/:logid", (res, req) => appendLog(server, res, req))
     logsrd.get("/log/:logid/config", (res, req) => getConfig(server, res, req))
     logsrd.get("/log/:logid/head", (res, req) => getHead(server, res, req))
@@ -84,7 +86,7 @@ async function run(): Promise<void> {
     })
 }
 
-function readPost(res: HttpResponse, cb: (data: Uint8Array) => void, err: () => any) {
+function readPost(res: uWS.HttpResponse, cb: (data: Uint8Array) => void, err: () => any) {
     let buffer: Buffer
     /* Register data cb */
     res.onData((ab, isLast) => {
@@ -128,6 +130,8 @@ function readPost(res: HttpResponse, cb: (data: Uint8Array) => void, err: () => 
 }
 
 async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
+    const request = new CreateLogRequest(new HttpPostRequest(req, res))
+    request.process()
     const contentType = req.getHeader("content-type")
     if (!contentType.startsWith("application/json")) {
         res.cork(() => {

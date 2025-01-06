@@ -20,7 +20,7 @@ async function run() {
 
     let results = []
 
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 1; i++) {
         results.push(testIteration())
     }
 
@@ -87,7 +87,9 @@ async function testIteration() {
 
     const config = await body.json()
 
-    for (let entryNum = 0; entryNum < 200; entryNum++) {
+    console.log("Created log", config.logId)
+
+    for (let entryNum = 0; entryNum < 10000; entryNum++) {
         const { statusCode, body } = await request(`http://127.0.0.1:7000/log/${config.logId}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
