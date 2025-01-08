@@ -31,19 +31,15 @@ async function run(): Promise<void> {
     const config = {
         host: `${host}:${port}`,
     }
-
-    const persist = new Persist({
+    const persist = {
         dataDir,
         pageSize: 4096,
         globalIndexCountLimit: 100_000,
         globalIndexSizeLimit: 1024 * 1024 * 100,
-    })
-
-    await persist.init()
-
-    const replicate = new Replicate()
-
+    }
+    const replicate = {}
     const server = new Server(config, persist, replicate)
+    await server.init()
 
     const logsrd = uWS.App({})
 

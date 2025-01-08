@@ -2,8 +2,8 @@ import GlobalLogEntry from "../../entry/global-log-entry"
 import LogLogEntry from "../../entry/log-log-entry"
 import { IOOperationType } from "../../globals"
 import LogId from "../../log-id"
-import LogIndex from "../log-index"
-import GlobalLog from "../persisted-log/global-log"
+import LogIndex from "../../log/log-index"
+import GlobalLog from "../global-log"
 import IOOperation from "./io-operation"
 
 export default class ReadEntriesIOOperation extends IOOperation {

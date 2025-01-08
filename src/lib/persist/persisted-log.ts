@@ -1,26 +1,26 @@
 import fs, { FileHandle } from "node:fs/promises"
 
-import GlobalLogCheckpoint from "../../entry/global-log-checkpoint"
-import GlobalLogEntry from "../../entry/global-log-entry"
-import GlobalLogEntryFactory from "../../entry/global-log-entry-factory"
-import LogLogCheckpoint from "../../entry/log-log-checkpoint"
-import LogLogEntry from "../../entry/log-log-entry"
-import LogLogEntryFactory from "../../entry/log-log-entry-factory"
-import { IOOperationType, PersistLogArgs, ReadIOOperation } from "../../globals"
-import LogId from "../../log-id"
-import Persist from "../../persist"
-import GlobalLogIOQueue from "../io/global-log-io-queue"
-import IOOperation from "../io/io-operation"
-import IOQueue from "../io/io-queue"
-import ReadConfigIOOperation from "../io/read-config-io-operation"
-import ReadEntriesIOOperation from "../io/read-entries-io-operation"
-import ReadHeadIOOperation from "../io/read-head-io-operation"
-import ReadRangeIOOperation from "../io/read-range-io-operation"
-import WriteIOOperation from "../io/write-io-operation"
+import GlobalLogCheckpoint from "../entry/global-log-checkpoint"
+import GlobalLogEntry from "../entry/global-log-entry"
+import GlobalLogEntryFactory from "../entry/global-log-entry-factory"
+import LogLogCheckpoint from "../entry/log-log-checkpoint"
+import LogLogEntry from "../entry/log-log-entry"
+import LogLogEntryFactory from "../entry/log-log-entry-factory"
+import { IOOperationType, PersistLogArgs, ReadIOOperation } from "../globals"
+import LogId from "../log-id"
+import Server from "../server"
+import GlobalLogIOQueue from "./io/global-log-io-queue"
+import IOOperation from "./io/io-operation"
+import IOQueue from "./io/io-queue"
+import ReadConfigIOOperation from "./io/read-config-io-operation"
+import ReadEntriesIOOperation from "./io/read-entries-io-operation"
+import ReadHeadIOOperation from "./io/read-head-io-operation"
+import ReadRangeIOOperation from "./io/read-range-io-operation"
+import WriteIOOperation from "./io/write-io-operation"
 
 export default class PersistedLog {
     logFile: string = ""
-    persist: Persist
+    server: Server
     ioQueue: GlobalLogIOQueue | IOQueue = new IOQueue()
     writeFH: FileHandle | null = null
     freeReadFhs: Array<FileHandle> = []
@@ -32,8 +32,8 @@ export default class PersistedLog {
     ioInProgress: Promise<void> | null = null
 
     // should always be instantiated through GlobalLog or LogLog
-    constructor({ persist }: PersistLogArgs) {
-        this.persist = persist
+    constructor({ server }: PersistLogArgs) {
+        this.server = server
     }
 
     async blockIO(): Promise<void> {

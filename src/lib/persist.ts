@@ -1,9 +1,8 @@
 import fs from "node:fs/promises"
 import path from "path"
 
-import LogId from "./log-id"
-import PersistLog from "./persist/persist-log"
-import HotLog from "./persist/persisted-log/hot-log"
+import HotLog from "./persist/hot-log"
+import Server from "./server"
 
 export type PersistConfig = {
     dataDir: string
@@ -18,40 +17,29 @@ export type PersistConfig = {
 const DEFAULT_HOT_LOG_FILE_NAME = "global-hot.log"
 
 export default class Persist {
+    server: Server
     config: PersistConfig
     oldHotLog: HotLog
     newHotLog: HotLog
-    logs: Map<string, PersistLog>
     emptyOldHotLogInProgress: Promise<void> | null = null
     moveNewToOldHotLogInProgress: Promise<void> | null = null
 
-    constructor(config: PersistConfig) {
+    constructor(server: Server, config: PersistConfig) {
+        this.server = server
         config.hotLogFileName = config.hotLogFileName || DEFAULT_HOT_LOG_FILE_NAME
         config.blobDir = config.blobDir || path.join(config.dataDir, "blobs")
         config.logDir = config.logDir || path.join(config.dataDir, "logs")
         this.config = config
         this.oldHotLog = new HotLog({
+            server,
             logFile: path.join(this.config.dataDir, `${config.hotLogFileName}.old`),
-            persist: this,
             isOldHotLog: true,
         })
         this.newHotLog = new HotLog({
+            server,
             logFile: path.join(this.config.dataDir, `${config.hotLogFileName}.new`),
-            persist: this,
             isNewHotLog: true,
         })
-        this.logs = new Map()
-    }
-
-    deleteLog(logId: LogId) {
-        this.logs.delete(logId.base64())
-    }
-
-    getLog(logId: LogId): PersistLog {
-        if (!this.logs.has(logId.base64())) {
-            this.logs.set(logId.base64(), new PersistLog(this, logId))
-        }
-        return this.logs.get(logId.base64())!
     }
 
     async init(): Promise<void> {
@@ -92,7 +80,7 @@ export default class Persist {
             oldHotLog: 0,
         }
 
-        for (const log of this.logs.values()) {
+        for (const log of this.server.logs.values()) {
             entryCounts.newHotLog += log.newHotLogEntryCount()
             entryCounts.oldHotLog += log.oldHotLogEntryCount()
         }
@@ -106,7 +94,7 @@ export default class Persist {
             throw new Error("old hot log should exist")
         }
 
-        for (const log of this.logs.values()) {
+        for (const log of this.server.logs.values()) {
             await log.emptyOldHotLog()
         }
 
@@ -130,8 +118,8 @@ export default class Persist {
         await fs.unlink(this.oldHotLog.logFile)
 
         this.oldHotLog = new HotLog({
+            server: this.server,
             logFile: this.oldHotLog.logFile,
-            persist: this,
             isOldHotLog: true,
         })
     }
@@ -152,8 +140,8 @@ export default class Persist {
         // move new to old hot log file
         await fs.rename(this.newHotLog.logFile, this.oldHotLog.logFile)
         const newHotLog = new HotLog({
+            server: this.server,
             logFile: this.newHotLog.logFile,
-            persist: this,
             isNewHotLog: true,
         })
         // swap newHotLog to oldHotLog
@@ -163,7 +151,7 @@ export default class Persist {
         this.oldHotLog = this.newHotLog
         this.newHotLog = newHotLog
         // for all open logs the newHotLogIndex is now the oldHotLogIndex
-        for (const log of this.logs.values()) {
+        for (const log of this.server.logs.values()) {
             log.moveNewToOldHotLog()
         }
         // unblock IO

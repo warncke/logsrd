@@ -1,27 +1,27 @@
 import fs from "node:fs/promises"
 import path from "path"
 
-import JSONCommandType from "../entry/command/command-type/json-command-type"
-import CreateLogCommand from "../entry/command/create-log-command"
-import GlobalLogEntry from "../entry/global-log-entry"
-import LogEntry from "../entry/log-entry"
-import LogLogEntry from "../entry/log-log-entry"
-import LogConfig from "../log-config"
-import LogId from "../log-id"
-import Persist from "../persist"
-import GlobalLogIndex from "./global-log-index"
-import ReadConfigIOOperation from "./io/read-config-io-operation"
-import ReadEntriesIOOperation from "./io/read-entries-io-operation"
-import ReadHeadIOOperation from "./io/read-head-io-operation"
-import WriteIOOperation from "./io/write-io-operation"
-import LogIndex from "./log-index"
-import LogLogIndex from "./log-log-index"
-import PersistLogStats from "./persist-log-stats"
-import LogLog from "./persisted-log/log-log"
-import PersistedLog from "./persisted-log/persisted-log"
+import JSONCommandType from "./entry/command/command-type/json-command-type"
+import CreateLogCommand from "./entry/command/create-log-command"
+import GlobalLogEntry from "./entry/global-log-entry"
+import LogEntry from "./entry/log-entry"
+import LogLogEntry from "./entry/log-log-entry"
+import LogConfig from "./log-config"
+import LogId from "./log-id"
+import GlobalLogIndex from "./log/global-log-index"
+import LogIndex from "./log/log-index"
+import LogLogIndex from "./log/log-log-index"
+import PersistLogStats from "./log/log-stats"
+import ReadConfigIOOperation from "./persist/io/read-config-io-operation"
+import ReadEntriesIOOperation from "./persist/io/read-entries-io-operation"
+import ReadHeadIOOperation from "./persist/io/read-head-io-operation"
+import WriteIOOperation from "./persist/io/write-io-operation"
+import LogLog from "./persist/log-log"
+import PersistedLog from "./persist/persisted-log"
+import Server from "./server"
 
-export default class PersistLog {
-    persist: Persist
+export default class Log {
+    server: Server
     logId: LogId
     newHotLogIndex: GlobalLogIndex | null = null
     oldHotLogIndex: GlobalLogIndex | null = null
@@ -31,16 +31,16 @@ export default class PersistLog {
     stats: PersistLogStats = new PersistLogStats()
     config: LogConfig | null = null
 
-    constructor(persist: Persist, logId: LogId) {
-        this.persist = persist
+    constructor(server: Server, logId: LogId) {
+        this.server = server
         this.logId = logId
     }
 
     async getLog(): Promise<LogLog> {
         if (this.logLog === null) {
             this.logLog = new LogLog({
-                persist: this.persist,
-                persistLog: this,
+                server: this.server,
+                log: this,
             })
             await this.logLog.init()
         }
@@ -83,7 +83,7 @@ export default class PersistLog {
         this.oldHotLogIndex = this.newHotLogIndex
         this.newHotLogIndex = null
         // get/delete any current ops queued for old hot log which used to be new hot log
-        const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
+        const logQueue = this.server.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
         // reassign ops to correct log
         if (logQueue !== null) {
             const [reads, writes] = logQueue.drain()
@@ -93,14 +93,14 @@ export default class PersistLog {
                 }
                 // reads stay on old hot log but need the correct index
                 ;(op as ReadHeadIOOperation).index = this.oldHotLogIndex!
-                this.persist.oldHotLog.ioQueue.enqueue(op)
+                this.server.persist.oldHotLog.ioQueue.enqueue(op)
             }
             for (const op of writes) {
                 if (op.processing) {
                     console.error("write op already processing", op)
                 }
                 // writes got to new hot log
-                this.persist.newHotLog.ioQueue.enqueue(op)
+                this.server.persist.newHotLog.ioQueue.enqueue(op)
             }
         }
     }
@@ -127,14 +127,14 @@ export default class PersistLog {
         // move any entries
         if (moveEntries.length > 0) {
             // TODO: make this incremental if there are a large number of entries
-            const op = await this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex, moveEntries)
+            const op = await this.readEntriesOp(this.server.persist.oldHotLog, this.oldHotLogIndex, moveEntries)
             if (op.entries === null) {
                 throw new Error("entries is null")
             }
             const ops = op.entries.map((entry) => this.appendOp(this.logLog!, entry.entry, entry.entryNum))
             await Promise.all(ops)
             // get/delete any current ops queued for old hot log
-            const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
+            const logQueue = this.server.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
             // reassign ops to correct log
             if (logQueue !== null) {
                 const [reads, writes] = logQueue.drain()
@@ -155,7 +155,7 @@ export default class PersistLog {
             }
         } else {
             // if there were no entries to move there should not be anything queued
-            const logQueue = this.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
+            const logQueue = this.server.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
             // reassign ops to correct log
             if (logQueue !== null) {
                 const [reads, writes] = logQueue.drain()
@@ -174,12 +174,12 @@ export default class PersistLog {
             }
         }
         // wait for any ioInProgress on old hot log to complete
-        await this.persist.oldHotLog.waitInProgress()
+        await this.server.persist.oldHotLog.waitInProgress()
         this.oldHotLogIndex = null
     }
 
     async append(entry: LogEntry): Promise<GlobalLogEntry | LogLogEntry> {
-        const op = await this.appendOp(this.persist.newHotLog, entry)
+        const op = await this.appendOp(this.server.persist.newHotLog, entry)
         if (op.entry instanceof GlobalLogEntry || op.entry instanceof LogLogEntry) {
             return op.entry
         } else {
@@ -197,7 +197,7 @@ export default class PersistLog {
         this.creating = true
         const entry = new CreateLogCommand({ value: config })
         try {
-            const op = this.appendOp(this.persist.newHotLog, entry)
+            const op = this.appendOp(this.server.persist.newHotLog, entry)
             this.config = config
         } catch (err) {
             throw err
@@ -263,14 +263,14 @@ export default class PersistLog {
             if (logLogConfigEntryNum !== null && logLogConfigEntryNum >= configEntryNum) {
                 return [this.logLog!, this.logLogIndex!]
             } else {
-                return [this.persist.newHotLog, this.newHotLogIndex]
+                return [this.server.persist.newHotLog, this.newHotLogIndex]
             }
         } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
             const [configEntryNum] = this.oldHotLogIndex.lastConfig()
             if (logLogConfigEntryNum !== null && logLogConfigEntryNum >= configEntryNum) {
                 return [this.logLog!, this.logLogIndex!]
             } else {
-                return [this.persist.oldHotLog, this.oldHotLogIndex]
+                return [this.server.persist.oldHotLog, this.oldHotLogIndex]
             }
         } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
             return [this.logLog!, this.logLogIndex]
@@ -306,14 +306,14 @@ export default class PersistLog {
             if (logLogHeadEntryNum !== null && logLogHeadEntryNum >= headEntryNum) {
                 return [this.logLog!, this.logLogIndex!]
             } else {
-                return [this.persist.newHotLog, this.newHotLogIndex]
+                return [this.server.persist.newHotLog, this.newHotLogIndex]
             }
         } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
             const [headEntryNum] = this.oldHotLogIndex.lastEntry()
             if (logLogHeadEntryNum !== null && logLogHeadEntryNum >= headEntryNum) {
                 return [this.logLog!, this.logLogIndex!]
             } else {
-                return [this.persist.oldHotLog, this.oldHotLogIndex]
+                return [this.server.persist.oldHotLog, this.oldHotLogIndex]
             }
         } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
             return [this.logLog!, this.logLogIndex]
@@ -349,10 +349,10 @@ export default class PersistLog {
             ops.push(this.readEntriesOp(this.logLog!, this.logLogIndex!, logLogEntries))
         }
         if (oldHotLogEntries.length > 0) {
-            ops.push(this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex!, oldHotLogEntries))
+            ops.push(this.readEntriesOp(this.server.persist.oldHotLog, this.oldHotLogIndex!, oldHotLogEntries))
         }
         if (newHotLogEntries.length > 0) {
-            ops.push(this.readEntriesOp(this.persist.newHotLog, this.newHotLogIndex!, newHotLogEntries))
+            ops.push(this.readEntriesOp(this.server.persist.newHotLog, this.newHotLogIndex!, newHotLogEntries))
         }
         // wait for all ops to complete
         const results = await Promise.all(ops)
@@ -404,10 +404,10 @@ export default class PersistLog {
             ops.push(this.readEntriesOp(this.logLog!, this.logLogIndex!, logLogEntries))
         }
         if (oldHotLogEntries.length > 0) {
-            ops.push(this.readEntriesOp(this.persist.oldHotLog, this.oldHotLogIndex!, oldHotLogEntries))
+            ops.push(this.readEntriesOp(this.server.persist.oldHotLog, this.oldHotLogIndex!, oldHotLogEntries))
         }
         if (newHotLogEntries.length > 0) {
-            ops.push(this.readEntriesOp(this.persist.newHotLog, this.newHotLogIndex!, newHotLogEntries))
+            ops.push(this.readEntriesOp(this.server.persist.newHotLog, this.newHotLogIndex!, newHotLogEntries))
         }
         // wait for all ops to complete
         const results = await Promise.all(ops)
@@ -475,6 +475,6 @@ export default class PersistLog {
         if (this.logId.logDirPrefix() !== LogId.newFromBase64(this.logId.base64()).logDirPrefix()) {
             console.error("logId mismatch", this.logId, this.logId.logId.buffer)
         }
-        return path.join(this.persist.config.logDir!, this.logId.logDirPrefix(), `${this.logId.base64()}.log`)
+        return path.join(this.server.persist.config.logDir!, this.logId.logDirPrefix(), `${this.logId.base64()}.log`)
     }
 }

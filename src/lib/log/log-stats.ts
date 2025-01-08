@@ -1,7 +1,7 @@
 import { IOOperationType } from "../globals"
-import IOOperation from "./io/io-operation"
-import ReadIOOperation from "./io/read-range-io-operation"
-import WriteIOOperation from "./io/write-io-operation"
+import IOOperation from "../persist/io/io-operation"
+import ReadIOOperation from "../persist/io/read-range-io-operation"
+import WriteIOOperation from "../persist/io/write-io-operation"
 
 export default class PersistLogStats {
     ioReads: number = 0

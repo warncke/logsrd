@@ -1,14 +1,14 @@
 import { FileHandle } from "node:fs/promises"
 import path from "node:path"
 
-import LogLogCheckpoint from "../../entry/log-log-checkpoint"
-import LogLogEntry from "../../entry/log-log-entry"
-import LogLogEntryFactory from "../../entry/log-log-entry-factory"
-import { LOG_LOG_CHECKPOINT_BYTE_LENGTH, LOG_LOG_CHECKPOINT_INTERVAL, PersistLogArgs } from "../../globals"
-import LogId from "../../log-id"
-import WriteIOOperation from "../io/write-io-operation"
-import PersistLog from "../persist-log"
-import PersistedLog from "../persisted-log/persisted-log"
+import LogLogCheckpoint from "../entry/log-log-checkpoint"
+import LogLogEntry from "../entry/log-log-entry"
+import LogLogEntryFactory from "../entry/log-log-entry-factory"
+import { LOG_LOG_CHECKPOINT_BYTE_LENGTH, LOG_LOG_CHECKPOINT_INTERVAL, PersistLogArgs } from "../globals"
+import Log from "../log"
+import LogId from "../log-id"
+import WriteIOOperation from "./io/write-io-operation"
+import PersistedLog from "./persisted-log"
 
 type OpInfo = {
     offset: number
@@ -17,21 +17,21 @@ type OpInfo = {
 }
 
 export default class LogLog extends PersistedLog {
-    persistLog: PersistLog
+    log: Log
     maxReadFHs: number = 4
 
-    constructor({ persistLog, ...args }: PersistLogArgs & { persistLog: PersistLog }) {
+    constructor({ log: persistLog, ...args }: PersistLogArgs & { log: Log }) {
         super(args)
-        this.persistLog = persistLog
+        this.log = persistLog
         this.logFile = path.join(
-            this.persist.config.logDir!,
-            this.persistLog.logId.logDirPrefix(),
-            `${this.persistLog.logId.base64()}.log`,
+            this.server.persist.config.logDir!,
+            this.log.logId.logDirPrefix(),
+            `${this.log.logId.base64()}.log`,
         )
     }
 
     logName(): string {
-        return `log ${this.persistLog.logId.base64()}`
+        return `log ${this.log.logId.base64()}`
     }
 
     async _processReadLogEntry(
@@ -103,7 +103,7 @@ export default class LogLog extends PersistedLog {
             const u8s: Uint8Array[] = []
             // keep track of the number of bytes expected to be written
             let writeBytes = 0
-            let maxEntryNum = this.persistLog.maxEntryNum()
+            let maxEntryNum = this.log.maxEntryNum()
             const opInfo: OpInfo[] = []
             // add all items from queue to list of u8s to write
             for (const op of ops) {
@@ -132,7 +132,7 @@ export default class LogLog extends PersistedLog {
                     const checkpointEntry = new LogLogCheckpoint({
                         lastEntryOffset,
                         lastEntryLength: entry.byteLength(),
-                        lastConfigOffset: this.persistLog.lastLogConfigOffset(),
+                        lastConfigOffset: this.log.lastLogConfigOffset(),
                     })
                     // use Buffer here because this will never run in browser
                     const entryBuffer = Buffer.concat(entry.u8s())
@@ -159,7 +159,7 @@ export default class LogLog extends PersistedLog {
                     const checkpointEntry = new LogLogCheckpoint({
                         lastEntryOffset: 0,
                         lastEntryLength: 0,
-                        lastConfigOffset: this.persistLog.lastLogConfigOffset(),
+                        lastConfigOffset: this.log.lastLogConfigOffset(),
                     })
                     // add checkpoint entry
                     u8s.push(...checkpointEntry.u8s())
@@ -200,7 +200,7 @@ export default class LogLog extends PersistedLog {
             for (const op of opInfo) {
                 op.op.entry = op.entry
                 op.op.bytesWritten = op.entry.byteLength()
-                this.persistLog.addLogLogEntry(op.entry, op.entry.entryNum, op.offset, op.entry.byteLength())
+                this.log.addLogLogEntry(op.entry, op.entry.entryNum, op.offset, op.entry.byteLength())
                 op.op.complete(op.op)
             }
         } catch (err) {
@@ -223,6 +223,6 @@ export default class LogLog extends PersistedLog {
             // TODO: error handling
             console.error("cksum verification failed", entry)
         }
-        this.persistLog.addLogLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
+        this.log.addLogLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
     }
 }

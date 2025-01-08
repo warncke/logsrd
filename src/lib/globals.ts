@@ -13,6 +13,7 @@ import ReadConfigIOOperation from "./persist/io/read-config-io-operation"
 import ReadEntriesIOOperation from "./persist/io/read-entries-io-operation"
 import ReadHeadIOOperation from "./persist/io/read-head-io-operation"
 import ReadRangeIOOperation from "./persist/io/read-range-io-operation"
+import Server from "./server"
 
 /**
  * Maximum entry size of 32KB and maximum log size of 16MB are temporary limitations
@@ -124,7 +125,7 @@ export interface ILogConfig {
  *
  */
 export type PersistLogArgs = {
-    persist: Persist
+    server: Server
 }
 
 /**

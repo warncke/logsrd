@@ -1,23 +1,13 @@
 import fs, { FileHandle } from "node:fs/promises"
 
-import GlobalLogCheckpoint from "../../entry/global-log-checkpoint"
-import GlobalLogEntry from "../../entry/global-log-entry"
-import GlobalLogEntryFactory from "../../entry/global-log-entry-factory"
-import LogLogEntry from "../../entry/log-log-entry"
-import {
-    GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH,
-    GLOBAL_LOG_CHECKPOINT_INTERVAL,
-    IOOperationType,
-    PersistLogArgs,
-    ReadIOOperation,
-} from "../../globals"
-import LogId from "../../log-id"
-import GlobalLogIOQueue from "../io/global-log-io-queue"
-import IOOperation from "../io/io-operation"
-import ReadConfigIOOperation from "../io/read-config-io-operation"
-import ReadHeadIOOperation from "../io/read-head-io-operation"
-import ReadRangeIOOperation from "../io/read-range-io-operation"
-import WriteIOOperation from "../io/write-io-operation"
+import GlobalLogCheckpoint from "../entry/global-log-checkpoint"
+import GlobalLogEntry from "../entry/global-log-entry"
+import GlobalLogEntryFactory from "../entry/global-log-entry-factory"
+import LogLogEntry from "../entry/log-log-entry"
+import { GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH, GLOBAL_LOG_CHECKPOINT_INTERVAL, PersistLogArgs } from "../globals"
+import LogId from "../log-id"
+import GlobalLogIOQueue from "./io/global-log-io-queue"
+import WriteIOOperation from "./io/write-io-operation"
 import PersistedLog from "./persisted-log"
 
 type LogOp = {
@@ -155,7 +145,7 @@ export default class GlobalLog extends PersistedLog {
                     if (!logOps.has(logIdBase64)) {
                         logOps.set(logIdBase64, {
                             logId: op.logId,
-                            maxEntryNum: this.persist.getLog(op.logId).maxEntryNum(),
+                            maxEntryNum: this.server.getLog(op.logId).maxEntryNum(),
                             ops: [],
                         })
                     }
@@ -267,7 +257,6 @@ export default class GlobalLog extends PersistedLog {
             }
 
             for (const opInfo of logOps.values()) {
-                const log = this.persist.getLog(opInfo.logId)
                 for (const op of opInfo.ops) {
                     op.op.bytesWritten = op.entry.byteLength()
                     this.addEntryToIndex(op.entry as GlobalLogEntry, op.offset)
@@ -299,7 +288,7 @@ export default class GlobalLog extends PersistedLog {
     }
 
     addEntryToIndex(entry: GlobalLogEntry, entryOffset: number): void {
-        const persistLog = this.persist.getLog(entry.logId)
+        const persistLog = this.server.getLog(entry.logId)
         if (this.isNewHotLog) {
             persistLog.addNewHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         } else if (this.isOldHotLog) {

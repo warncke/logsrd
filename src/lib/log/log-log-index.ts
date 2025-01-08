@@ -1,5 +1,5 @@
 import { LOG_LOG_PREFIX_BYTE_LENGTH } from "../globals"
-import LogIndex from "./log-index"
+import LogIndex from "../log/log-index"
 
 export default class LogLogIndex extends LogIndex {
     byteLength(): number {
