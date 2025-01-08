@@ -57,14 +57,17 @@ export default class IOOperation {
         }
     }
 
-    completeWithError(error: any) {
+    completeWithError(error: any, retried: boolean = false) {
         this.endTime = Date.now()
         // this shouldnt happen because scheduling of IO should be after the function in promise is run
         if (this.reject === null) {
-            console.error("IOQueueItem completeWithError with no resolve")
-            setTimeout(() => {
-                this.completeWithError(error)
-            }, 0)
+            console.error("IOQueueItem completeWithError with no resolve", this)
+            // try once more
+            if (!retried) {
+                setTimeout(() => {
+                    this.completeWithError(error, true)
+                }, 0)
+            }
         } else {
             this.reject(error)
         }

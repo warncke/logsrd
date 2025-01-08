@@ -43,6 +43,10 @@ export default class Persist {
         this.logs = new Map()
     }
 
+    deleteLog(logId: LogId) {
+        this.logs.delete(logId.base64())
+    }
+
     getLog(logId: LogId): PersistLog {
         if (!this.logs.has(logId.base64())) {
             this.logs.set(logId.base64(), new PersistLog(this, logId))
