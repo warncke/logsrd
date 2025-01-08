@@ -7,11 +7,9 @@ export type ReplicateConfig = {}
 
 export default class Replicate {
     server: Server
-    config: ReplicateConfig
 
-    constructor(server: Server, config: ReplicateConfig) {
+    constructor(server: Server) {
         this.server = server
-        this.config = config
     }
 
     async replicate(logId: LogId, config: LogConfig, entry: LogEntry) {

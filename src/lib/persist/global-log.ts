@@ -1,11 +1,13 @@
 import fs, { FileHandle } from "node:fs/promises"
+import path from "node:path"
 
 import GlobalLogCheckpoint from "../entry/global-log-checkpoint"
 import GlobalLogEntry from "../entry/global-log-entry"
 import GlobalLogEntryFactory from "../entry/global-log-entry-factory"
 import LogLogEntry from "../entry/log-log-entry"
-import { GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH, GLOBAL_LOG_CHECKPOINT_INTERVAL, PersistLogArgs } from "../globals"
+import { GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH, GLOBAL_LOG_CHECKPOINT_INTERVAL } from "../globals"
 import LogId from "../log-id"
+import Server from "../server"
 import GlobalLogIOQueue from "./io/global-log-io-queue"
 import WriteIOOperation from "./io/write-io-operation"
 import PersistedLog from "./persisted-log"
@@ -24,29 +26,17 @@ type LogOpInfo = {
 export default class GlobalLog extends PersistedLog {
     maxReadFHs: number = 16
     ioQueue = new GlobalLogIOQueue()
-    isOldHotLog: boolean = false
-    isNewHotLog: boolean = false
+    isNew: boolean = false
 
-    constructor({
-        isNewHotLog = false,
-        isOldHotLog = false,
-        logFile,
-        ...args
-    }: PersistLogArgs & { isNewHotLog?: boolean; isOldHotLog?: boolean; logFile: string }) {
-        super(args)
-        this.isNewHotLog = isNewHotLog
-        this.isOldHotLog = isOldHotLog
-        this.logFile = logFile
+    constructor(server: Server, isNew: boolean) {
+        super(server)
+        this.isNew = isNew
+        const logFile = path.join(server.config.dataDir, server.config.hotLogFileName!)
+        this.logFile = isNew ? `${logFile}.new` : `${logFile}.old`
     }
 
     logName(): string {
-        if (this.isOldHotLog) {
-            return "oldHot"
-        } else if (this.isNewHotLog) {
-            return "newHot"
-        } else {
-            return "global"
-        }
+        return this.isNew ? "newHot" : "oldHot"
     }
 
     async _processReadLogEntry(
@@ -288,13 +278,11 @@ export default class GlobalLog extends PersistedLog {
     }
 
     addEntryToIndex(entry: GlobalLogEntry, entryOffset: number): void {
-        const persistLog = this.server.getLog(entry.logId)
-        if (this.isNewHotLog) {
-            persistLog.addNewHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
-        } else if (this.isOldHotLog) {
-            persistLog.addOldHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
+        const persist = this.server.getLog(entry.logId)
+        if (this.isNew) {
+            persist.addNewHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         } else {
-            throw new Error("unknown log type")
+            persist.addOldHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         }
     }
 }

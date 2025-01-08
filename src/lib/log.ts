@@ -11,7 +11,7 @@ import LogId from "./log-id"
 import GlobalLogIndex from "./log/global-log-index"
 import LogIndex from "./log/log-index"
 import LogLogIndex from "./log/log-log-index"
-import PersistLogStats from "./log/log-stats"
+import LogStats from "./log/log-stats"
 import ReadConfigIOOperation from "./persist/io/read-config-io-operation"
 import ReadEntriesIOOperation from "./persist/io/read-entries-io-operation"
 import ReadHeadIOOperation from "./persist/io/read-head-io-operation"
@@ -28,7 +28,7 @@ export default class Log {
     logLogIndex: LogLogIndex | null = null
     logLog: LogLog | null = null
     creating: boolean = false
-    stats: PersistLogStats = new PersistLogStats()
+    stats: LogStats = new LogStats()
     config: LogConfig | null = null
 
     constructor(server: Server, logId: LogId) {
@@ -38,10 +38,7 @@ export default class Log {
 
     async getLog(): Promise<LogLog> {
         if (this.logLog === null) {
-            this.logLog = new LogLog({
-                server: this.server,
-                log: this,
-            })
+            this.logLog = new LogLog(this.server, this)
             await this.logLog.init()
         }
         return this.logLog
@@ -475,6 +472,6 @@ export default class Log {
         if (this.logId.logDirPrefix() !== LogId.newFromBase64(this.logId.base64()).logDirPrefix()) {
             console.error("logId mismatch", this.logId, this.logId.logId.buffer)
         }
-        return path.join(this.server.persist.config.logDir!, this.logId.logDirPrefix(), `${this.logId.base64()}.log`)
+        return path.join(this.server.config.logDir!, this.logId.logDirPrefix(), `${this.logId.base64()}.log`)
     }
 }

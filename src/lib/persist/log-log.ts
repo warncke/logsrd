@@ -4,9 +4,10 @@ import path from "node:path"
 import LogLogCheckpoint from "../entry/log-log-checkpoint"
 import LogLogEntry from "../entry/log-log-entry"
 import LogLogEntryFactory from "../entry/log-log-entry-factory"
-import { LOG_LOG_CHECKPOINT_BYTE_LENGTH, LOG_LOG_CHECKPOINT_INTERVAL, PersistLogArgs } from "../globals"
+import { LOG_LOG_CHECKPOINT_BYTE_LENGTH, LOG_LOG_CHECKPOINT_INTERVAL } from "../globals"
 import Log from "../log"
 import LogId from "../log-id"
+import Server from "../server"
 import WriteIOOperation from "./io/write-io-operation"
 import PersistedLog from "./persisted-log"
 
@@ -20,14 +21,10 @@ export default class LogLog extends PersistedLog {
     log: Log
     maxReadFHs: number = 4
 
-    constructor({ log: persistLog, ...args }: PersistLogArgs & { log: Log }) {
-        super(args)
-        this.log = persistLog
-        this.logFile = path.join(
-            this.server.persist.config.logDir!,
-            this.log.logId.logDirPrefix(),
-            `${this.log.logId.base64()}.log`,
-        )
+    constructor(server: Server, log: Log) {
+        super(server)
+        this.log = log
+        this.logFile = path.join(server.config.logDir!, this.log.logId.logDirPrefix(), `${this.log.logId.base64()}.log`)
     }
 
     logName(): string {

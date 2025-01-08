@@ -1,16 +1,25 @@
+import path from "node:path"
+
 import BinaryLogEntry from "./entry/binary-log-entry"
 import GlobalLogEntry from "./entry/global-log-entry"
 import JSONLogEntry from "./entry/json-log-entry"
 import LogLogEntry from "./entry/log-log-entry"
-import { MAX_RESPONSE_ENTRIES } from "./globals"
+import { DEFAULT_HOT_LOG_FILE_NAME, MAX_RESPONSE_ENTRIES } from "./globals"
 import Log from "./log"
 import LogConfig from "./log-config"
 import LogId from "./log-id"
-import Persist, { PersistConfig } from "./persist"
-import Replicate, { ReplicateConfig } from "./replicate"
+import Persist from "./persist"
+import Replicate from "./replicate"
 
 export type ServerConfig = {
     host: string
+    dataDir: string
+    pageSize: number
+    globalIndexCountLimit: number
+    globalIndexSizeLimit: number
+    hotLogFileName?: string
+    blobDir?: string
+    logDir?: string
 }
 
 export default class Server {
@@ -19,10 +28,13 @@ export default class Server {
     replicate: Replicate
     logs: Map<string, Log> = new Map()
 
-    constructor(config: ServerConfig, persist: PersistConfig, replicate: ReplicateConfig) {
+    constructor(config: ServerConfig) {
+        config.hotLogFileName = config.hotLogFileName || DEFAULT_HOT_LOG_FILE_NAME
+        config.blobDir = config.blobDir || path.join(config.dataDir, "blobs")
+        config.logDir = config.logDir || path.join(config.dataDir, "logs")
         this.config = config
-        this.persist = new Persist(this, persist)
-        this.replicate = new Replicate(this, replicate)
+        this.persist = new Persist(this)
+        this.replicate = new Replicate(this)
     }
 
     delLog(logId: LogId) {

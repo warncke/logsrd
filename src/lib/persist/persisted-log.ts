@@ -6,7 +6,7 @@ import GlobalLogEntryFactory from "../entry/global-log-entry-factory"
 import LogLogCheckpoint from "../entry/log-log-checkpoint"
 import LogLogEntry from "../entry/log-log-entry"
 import LogLogEntryFactory from "../entry/log-log-entry-factory"
-import { IOOperationType, PersistLogArgs, ReadIOOperation } from "../globals"
+import { IOOperationType, ReadIOOperation } from "../globals"
 import LogId from "../log-id"
 import Server from "../server"
 import GlobalLogIOQueue from "./io/global-log-io-queue"
@@ -32,7 +32,7 @@ export default class PersistedLog {
     ioInProgress: Promise<void> | null = null
 
     // should always be instantiated through GlobalLog or LogLog
-    constructor({ server }: PersistLogArgs) {
+    constructor(server: Server) {
         this.server = server
     }
 

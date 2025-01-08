@@ -1,45 +1,19 @@
 import fs from "node:fs/promises"
-import path from "path"
 
 import HotLog from "./persist/hot-log"
 import Server from "./server"
 
-export type PersistConfig = {
-    dataDir: string
-    pageSize: number
-    globalIndexCountLimit: number
-    globalIndexSizeLimit: number
-    hotLogFileName?: string
-    blobDir?: string
-    logDir?: string
-}
-
-const DEFAULT_HOT_LOG_FILE_NAME = "global-hot.log"
-
 export default class Persist {
     server: Server
-    config: PersistConfig
     oldHotLog: HotLog
     newHotLog: HotLog
     emptyOldHotLogInProgress: Promise<void> | null = null
     moveNewToOldHotLogInProgress: Promise<void> | null = null
 
-    constructor(server: Server, config: PersistConfig) {
+    constructor(server: Server) {
         this.server = server
-        config.hotLogFileName = config.hotLogFileName || DEFAULT_HOT_LOG_FILE_NAME
-        config.blobDir = config.blobDir || path.join(config.dataDir, "blobs")
-        config.logDir = config.logDir || path.join(config.dataDir, "logs")
-        this.config = config
-        this.oldHotLog = new HotLog({
-            server,
-            logFile: path.join(this.config.dataDir, `${config.hotLogFileName}.old`),
-            isOldHotLog: true,
-        })
-        this.newHotLog = new HotLog({
-            server,
-            logFile: path.join(this.config.dataDir, `${config.hotLogFileName}.new`),
-            isNewHotLog: true,
-        })
+        this.oldHotLog = new HotLog(server, false)
+        this.newHotLog = new HotLog(server, true)
     }
 
     async init(): Promise<void> {
@@ -65,7 +39,7 @@ export default class Persist {
                 .then(() => {
                     this.emptyOldHotLogInProgress = null
                 })
-        } else if (entryCounts.newHotLog > this.config.globalIndexCountLimit) {
+        } else if (entryCounts.newHotLog > this.server.config.globalIndexCountLimit) {
             this.moveNewToOldHotLogInProgress = this.moveNewToOldHotLog()
                 .catch((err) => console.error("moveNewToOldHotLog error", err))
                 .then(() => {
@@ -117,11 +91,7 @@ export default class Persist {
 
         await fs.unlink(this.oldHotLog.logFile)
 
-        this.oldHotLog = new HotLog({
-            server: this.server,
-            logFile: this.oldHotLog.logFile,
-            isOldHotLog: true,
-        })
+        this.oldHotLog = new HotLog(this.server, false)
     }
 
     async moveNewToOldHotLog(): Promise<void> {
@@ -139,15 +109,10 @@ export default class Persist {
         await this.newHotLog.closeAllFHs()
         // move new to old hot log file
         await fs.rename(this.newHotLog.logFile, this.oldHotLog.logFile)
-        const newHotLog = new HotLog({
-            server: this.server,
-            logFile: this.newHotLog.logFile,
-            isNewHotLog: true,
-        })
+        const newHotLog = new HotLog(this.server, true)
         // swap newHotLog to oldHotLog
         this.newHotLog.logFile = this.oldHotLog.logFile
-        this.newHotLog.isNewHotLog = false
-        this.newHotLog.isOldHotLog = true
+        this.newHotLog.isNew = false
         this.oldHotLog = this.newHotLog
         this.newHotLog = newHotLog
         // for all open logs the newHotLogIndex is now the oldHotLogIndex

@@ -30,15 +30,12 @@ const NO_ENTRIES_INFO = "No entries"
 async function run(): Promise<void> {
     const config = {
         host: `${host}:${port}`,
-    }
-    const persist = {
         dataDir,
         pageSize: 4096,
         globalIndexCountLimit: 100_000,
         globalIndexSizeLimit: 1024 * 1024 * 100,
     }
-    const replicate = {}
-    const server = new Server(config, persist, replicate)
+    const server = new Server(config)
     await server.init()
 
     const logsrd = uWS.App({})

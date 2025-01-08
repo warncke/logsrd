@@ -3,7 +3,7 @@ import IOOperation from "../persist/io/io-operation"
 import ReadIOOperation from "../persist/io/read-range-io-operation"
 import WriteIOOperation from "../persist/io/write-io-operation"
 
-export default class PersistLogStats {
+export default class LogStats {
     ioReads: number = 0
     bytesRead: number = 0
     ioReadTimeAvg: number = 0
