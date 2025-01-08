@@ -6,6 +6,7 @@ import { MAX_RESPONSE_ENTRIES } from "./globals"
 import LogConfig from "./log-config"
 import LogId from "./log-id"
 import Persist from "./persist"
+import Replicate from "./replicate"
 
 export type ServerConfig = {
     host: string
@@ -14,10 +15,12 @@ export type ServerConfig = {
 export default class Server {
     config: ServerConfig
     persist: Persist
+    replicate: Replicate
 
-    constructor({ config, persist }: { config: ServerConfig; persist: Persist }) {
+    constructor(config: ServerConfig, persist: Persist, replicate: Replicate) {
         this.config = config
         this.persist = persist
+        this.replicate = replicate
     }
 
     async appendLog(logId: LogId, data: Uint8Array): Promise<GlobalLogEntry | LogLogEntry> {

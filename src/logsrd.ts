@@ -3,11 +3,13 @@ import uWS, { HttpResponse } from "uWebSockets.js"
 import { MAX_ENTRY_SIZE } from "./lib/globals"
 import LogId from "./lib/log-id"
 import Persist from "./lib/persist"
+import Replicate from "./lib/replicate"
 import Server from "./lib/server"
 
 const dataDir = process.env.DATA_DIR || "./data"
 const host = process.env.HOST || "127.0.0.1"
 const port = parseInt(process.env.PORT || "7000")
+const secret = process.env.SECRET || "secret"
 const version = "0.0.1"
 
 run().catch(console.error)
@@ -26,6 +28,10 @@ const INVALID_LOG_TYPE_ERROR = "Invalid log type"
 const NO_ENTRIES_INFO = "No entries"
 
 async function run(): Promise<void> {
+    const config = {
+        host: `${host}:${port}`,
+    }
+
     const persist = new Persist({
         dataDir,
         pageSize: 4096,
@@ -35,12 +41,9 @@ async function run(): Promise<void> {
 
     await persist.init()
 
-    const server = new Server({
-        config: {
-            host: `${host}:${port}`,
-        },
-        persist,
-    })
+    const replicate = new Replicate()
+
+    const server = new Server(config, persist, replicate)
 
     const logsrd = uWS.App({})
 
