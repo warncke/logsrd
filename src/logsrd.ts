@@ -64,7 +64,7 @@ async function run(): Promise<void> {
     logsrd.get("/admin/empty-old-hot-log", (res, req) => adminEmptyOldHotLog(server, res, req))
 
     /* Unhandled Routes */
-    logsrd.get("/*", (res) => {
+    logsrd.any("/*", (res) => {
         res.cork(() => {
             res.writeStatus("404")
             res.end("Not found")
