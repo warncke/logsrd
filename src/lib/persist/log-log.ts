@@ -1,5 +1,4 @@
 import { FileHandle } from "node:fs/promises"
-import path from "node:path"
 
 import LogLogCheckpoint from "../entry/log-log-checkpoint"
 import LogLogEntry from "../entry/log-log-entry"
@@ -24,7 +23,7 @@ export default class LogLog extends PersistedLog {
     constructor(server: Server, log: Log) {
         super(server)
         this.log = log
-        this.logFile = path.join(server.config.logDir!, this.log.logId.logDirPrefix(), `${this.log.logId.base64()}.log`)
+        this.logFile = log.filename()
     }
 
     logName(): string {
@@ -100,22 +99,12 @@ export default class LogLog extends PersistedLog {
             const u8s: Uint8Array[] = []
             // keep track of the number of bytes expected to be written
             let writeBytes = 0
-            let maxEntryNum = this.log.maxEntryNum()
-            const opInfo: OpInfo[] = []
+            // record offset for each entry
+            const offsets = []
             // add all items from queue to list of u8s to write
             for (const op of ops) {
                 // offset of entry from length of file + bytes written in current write
                 const entryOffset = this.byteLength + writeBytes
-                // if op does not have entryNum, assign it the next available entryNum
-                if (op.entryNum === null) {
-                    op.entryNum = maxEntryNum += 1
-                }
-                const entry = new LogLogEntry({ entry: op.entry, entryNum: op.entryNum })
-                opInfo.push({
-                    entry,
-                    offset: entryOffset,
-                    op,
-                })
                 let nextCheckpointOffset =
                     entryOffset > LOG_LOG_CHECKPOINT_INTERVAL
                         ? entryOffset % LOG_LOG_CHECKPOINT_INTERVAL === 0
@@ -123,16 +112,17 @@ export default class LogLog extends PersistedLog {
                             : entryOffset - (entryOffset % LOG_LOG_CHECKPOINT_INTERVAL) + LOG_LOG_CHECKPOINT_INTERVAL
                         : LOG_LOG_CHECKPOINT_INTERVAL
                 // if this entry would cross a checkpoint boundary then add checkpoint
-                if (entryOffset < nextCheckpointOffset && entryOffset + entry.byteLength() > nextCheckpointOffset) {
+                if (entryOffset < nextCheckpointOffset && entryOffset + op.entry.byteLength() > nextCheckpointOffset) {
+                    offsets.push(entryOffset)
                     // length of buffer segment to write before checkpoint
                     const lastEntryOffset = nextCheckpointOffset - entryOffset
                     const checkpointEntry = new LogLogCheckpoint({
                         lastEntryOffset,
-                        lastEntryLength: entry.byteLength(),
+                        lastEntryLength: op.entry.byteLength(),
                         lastConfigOffset: this.log.lastLogConfigOffset(),
                     })
                     // use Buffer here because this will never run in browser
-                    const entryBuffer = Buffer.concat(entry.u8s())
+                    const entryBuffer = Buffer.concat(op.entry.u8s())
                     // add beginning segment of entry before checkpoint
                     const beginU8 = new Uint8Array(entryBuffer.buffer, entryBuffer.byteOffset, lastEntryOffset)
                     u8s.push(beginU8)
@@ -144,10 +134,10 @@ export default class LogLog extends PersistedLog {
                     const endU8 = new Uint8Array(
                         entryBuffer.buffer,
                         entryBuffer.byteOffset + lastEntryOffset,
-                        entry.byteLength() - lastEntryOffset,
+                        op.entry.byteLength() - lastEntryOffset,
                     )
                     u8s.push(endU8)
-                    writeBytes += entry.byteLength() - lastEntryOffset
+                    writeBytes += op.entry.byteLength() - lastEntryOffset
                 }
                 // if we are exactly at checkpoint boundary then add a checkpoint
                 else if (entryOffset === nextCheckpointOffset) {
@@ -161,16 +151,16 @@ export default class LogLog extends PersistedLog {
                     // add checkpoint entry
                     u8s.push(...checkpointEntry.u8s())
                     writeBytes += checkpointEntry.byteLength()
-                    // need to update the offset to include the checkpoint entry
-                    opInfo.at(-1)!.offset += checkpointEntry.byteLength()
+                    offsets.push(entryOffset + checkpointEntry.byteLength())
                     // add entry
-                    u8s.push(...entry.u8s())
-                    writeBytes += entry.byteLength()
+                    u8s.push(...op.entry.u8s())
+                    writeBytes += op.entry.byteLength()
                 }
                 // otherwise add entry
                 else {
-                    u8s.push(...entry.u8s())
-                    writeBytes += entry.byteLength()
+                    offsets.push(entryOffset)
+                    u8s.push(...op.entry.u8s())
+                    writeBytes += op.entry.byteLength()
                 }
             }
 
@@ -193,12 +183,17 @@ export default class LogLog extends PersistedLog {
                 }
                 throw new Error(`Failed to write all bytes. Expected: ${writeBytes} Actual: ${ret.bytesWritten}`)
             }
-            // complete ops
-            for (const op of opInfo) {
-                op.op.entry = op.entry
-                op.op.bytesWritten = op.entry.byteLength()
-                this.log.addLogLogEntry(op.entry, op.entry.entryNum, op.offset, op.entry.byteLength())
-                op.op.complete(op.op)
+
+            if (ops.length !== offsets.length) {
+                throw new Error(`Offsets mismatch log=${this.logName()} ops=${ops.length} offsets=${offsets.length}`)
+            }
+
+            for (let i = 0; i < ops.length; i++) {
+                const op = ops[i]
+                const offset = offsets[i]
+                op.bytesWritten = op.entry.byteLength()
+                this.log.addLogLogEntry(op.entry, (op.entry as LogLogEntry).entryNum, offset, op.entry.byteLength())
+                op.complete(op)
             }
         } catch (err) {
             // reject promises for all iOps

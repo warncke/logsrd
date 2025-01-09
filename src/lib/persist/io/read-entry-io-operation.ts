@@ -5,13 +5,15 @@ import LogId from "../../log-id"
 import LogIndex from "../../log/log-index"
 import IOOperation from "./io-operation"
 
-export default class ReadHeadIOOperation extends IOOperation {
-    entry: GlobalLogEntry | LogLogEntry | null = null
+export default class ReadEntryIOOperation extends IOOperation {
     index: LogIndex
+    entryNum: number
+    entry: GlobalLogEntry | LogLogEntry | null = null
     bytesRead = 0
 
-    constructor(logId: LogId, index: LogIndex) {
-        super(IOOperationType.READ_HEAD, logId)
+    constructor(logId: LogId, index: LogIndex, entryNum: number) {
+        super(IOOperationType.READ_ENTRY, logId)
         this.index = index
+        this.entryNum = entryNum
     }
 }

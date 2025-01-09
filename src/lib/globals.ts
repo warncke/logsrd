@@ -8,9 +8,8 @@ import JSONLogEntry from "./entry/json-log-entry"
 import LogLogCheckpoint from "./entry/log-log-checkpoint"
 import LogLogEntry from "./entry/log-log-entry"
 import LogId from "./log-id"
-import ReadConfigIOOperation from "./persist/io/read-config-io-operation"
 import ReadEntriesIOOperation from "./persist/io/read-entries-io-operation"
-import ReadHeadIOOperation from "./persist/io/read-head-io-operation"
+import ReadEntryIOOperation from "./persist/io/read-entry-io-operation"
 import ReadRangeIOOperation from "./persist/io/read-range-io-operation"
 
 /**
@@ -95,18 +94,13 @@ export const LOG_TYPE_MAP: { [index: string]: LogType } = {
 }
 
 export enum IOOperationType {
-    READ_CONFIG,
+    READ_ENTRY,
     READ_ENTRIES,
-    READ_HEAD,
     READ_RANGE,
     WRITE,
 }
 
-export type ReadIOOperation =
-    | ReadConfigIOOperation
-    | ReadHeadIOOperation
-    | ReadRangeIOOperation
-    | ReadEntriesIOOperation
+export type ReadIOOperation = ReadEntryIOOperation | ReadEntriesIOOperation | ReadRangeIOOperation
 
 /**
  * Error thrown by log writer if a write was aborted.

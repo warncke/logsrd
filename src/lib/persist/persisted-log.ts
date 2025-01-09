@@ -12,9 +12,8 @@ import Server from "../server"
 import GlobalLogIOQueue from "./io/global-log-io-queue"
 import IOOperation from "./io/io-operation"
 import IOQueue from "./io/io-queue"
-import ReadConfigIOOperation from "./io/read-config-io-operation"
 import ReadEntriesIOOperation from "./io/read-entries-io-operation"
-import ReadHeadIOOperation from "./io/read-head-io-operation"
+import ReadEntryIOOperation from "./io/read-entry-io-operation"
 import ReadRangeIOOperation from "./io/read-range-io-operation"
 import WriteIOOperation from "./io/write-io-operation"
 
@@ -119,10 +118,14 @@ export default class PersistedLog {
 
     enqueueOp(op: IOOperation): void {
         this.ioQueue.enqueue(op)
+        this.processOps()
+    }
 
-        if (!this.ioBlocked && this.ioInProgress === null) {
-            this.processOps()
+    enqueueOps(ops: IOOperation[]): void {
+        for (const op of ops) {
+            this.ioQueue.enqueue(op)
         }
+        this.processOps()
     }
 
     processOps() {
@@ -130,6 +133,9 @@ export default class PersistedLog {
             return
         }
         if (this.ioInProgress !== null) {
+            return
+        }
+        if (!this.ioQueue.opPending()) {
             return
         }
         this.ioInProgress = this.processOpsAsync().then(() => {
@@ -144,9 +150,6 @@ export default class PersistedLog {
 
     async processOpsAsync(): Promise<void> {
         try {
-            if (!this.ioQueue.opPending()) {
-                return
-            }
             const [readOps, writeOps] = this.ioQueue.getReady()
             await Promise.all([this.processReadOps(readOps), this.processWriteOps(writeOps)])
         } catch (err) {
@@ -189,17 +192,22 @@ export default class PersistedLog {
 
     async _processReadOp(op: ReadIOOperation, fh: FileHandle): Promise<void> {
         switch (op.op) {
-            case IOOperationType.READ_HEAD:
-                return this._processReadHeadOp(op as ReadHeadIOOperation, fh)
+            case IOOperationType.READ_ENTRY:
+                return this._processReadEntryOp(op as ReadEntryIOOperation, fh)
             case IOOperationType.READ_ENTRIES:
                 return this._processReadEntriesOp(op as ReadEntriesIOOperation, fh)
             case IOOperationType.READ_RANGE:
                 return this._processReadRangeOp(op as ReadRangeIOOperation, fh)
-            case IOOperationType.READ_CONFIG:
-                return this._processReadConfigOp(op as ReadConfigIOOperation, fh)
             default:
                 throw new Error("unknown IO op")
         }
+    }
+
+    async _processReadEntryOp(op: ReadEntryIOOperation, fh: FileHandle): Promise<void> {
+        const [entry, bytesRead] = await this._processReadLogEntry(fh, op.logId!, ...op.index.entry(op.entryNum))
+        op.entry = entry
+        op.bytesRead = bytesRead
+        op.complete(op)
     }
 
     async _processReadEntriesOp(op: ReadEntriesIOOperation, fh: FileHandle): Promise<void> {
@@ -219,20 +227,6 @@ export default class PersistedLog {
         throw new Error("not implemented")
     }
 
-    async _processReadHeadOp(op: ReadHeadIOOperation, fh: FileHandle): Promise<void> {
-        const [entry, bytesRead] = await this._processReadLogEntry(fh, op.logId!, ...op.index.lastEntry())
-        op.entry = entry
-        op.bytesRead = bytesRead
-        op.complete(op)
-    }
-
-    async _processReadConfigOp(op: ReadConfigIOOperation, fh: FileHandle): Promise<void> {
-        const [entry, bytesRead] = await this._processReadLogEntry(fh, op.logId!, ...op.index.lastConfig())
-        op.entry = entry
-        op.bytesRead = bytesRead
-        op.complete(op)
-    }
-
     async _processReadLogEntry(
         fh: FileHandle,
         logId: LogId,
@@ -248,10 +242,9 @@ export default class PersistedLog {
     }
 
     /**
-     * this is a fundamentally dangerous operation. it is needed to recover from failed log compactions
+     * this is a fundamentally dangerous operation. it is needed to recover from failed partial writes
      * but it could easily lead to data loss in the case of bugs. for this reason it copies the truncated
-     * data to a backup file before truncating. TODO: add chained CRC to log entries that also allows
-     * verification that all entries exist in the correct order?
+     * data to a backup file before truncating.
      *
      * this should only be called when writes are already blocked.
      */

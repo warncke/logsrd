@@ -20,6 +20,9 @@ export const SCHEMA = {
             type: "string",
             enum: ["binary", "json"],
         },
+        stopped: {
+            type: "boolean",
+        },
     },
     requires: ["type"],
 }

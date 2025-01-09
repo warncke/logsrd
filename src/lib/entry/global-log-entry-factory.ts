@@ -69,7 +69,10 @@ export default class GlobalLogEntryFactory {
         entry: LogEntry
     } {
         const entryLength = GlobalLogEntryFactory.entryLengthFromU8(u8)
-        const logId = new LogId(new Uint8Array(u8.buffer, u8.byteOffset + 1, 16))
+        // TODO: copying the buffer here should not really be necessary but without it a mysterious error
+        // occurs in LogId.logDirPrefix encoding the logId to hex which may indicate some other bug somewhere
+        // else but this fixes it and everything else works so doing this for now
+        const logId = new LogId(new Uint8Array(u8.buffer.slice(u8.byteOffset + 1, u8.byteOffset + 17)))
         const entryNum = new Uint32Array(u8.buffer.slice(u8.byteOffset + 17, u8.byteOffset + 21))[0]
         const crc = new Uint32Array(u8.buffer.slice(u8.byteOffset + 23, u8.byteOffset + 27))[0]
         const entry = LogEntryFactory.fromU8(

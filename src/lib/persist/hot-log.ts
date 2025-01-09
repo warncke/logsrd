@@ -1,27 +1,15 @@
-import fs, { FileHandle } from "node:fs/promises"
+import { FileHandle } from "node:fs/promises"
 import path from "node:path"
 
 import GlobalLogCheckpoint from "../entry/global-log-checkpoint"
 import GlobalLogEntry from "../entry/global-log-entry"
 import GlobalLogEntryFactory from "../entry/global-log-entry-factory"
-import LogLogEntry from "../entry/log-log-entry"
 import { GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH, GLOBAL_LOG_CHECKPOINT_INTERVAL } from "../globals"
 import LogId from "../log-id"
 import Server from "../server"
 import GlobalLogIOQueue from "./io/global-log-io-queue"
 import WriteIOOperation from "./io/write-io-operation"
 import PersistedLog from "./persisted-log"
-
-type LogOp = {
-    offset: number
-    op: WriteIOOperation
-    entry: GlobalLogEntry | LogLogEntry
-}
-type LogOpInfo = {
-    logId: LogId
-    maxEntryNum: number
-    ops: LogOp[]
-}
 
 export default class HotLog extends PersistedLog {
     maxReadFHs: number = 16
@@ -84,6 +72,9 @@ export default class HotLog extends PersistedLog {
         let entry
         try {
             entry = GlobalLogEntryFactory.fromU8(u8)
+            if (entry.logId.logDirPrefix() !== LogId.newFromBase64(entry.logId.base64()).logDirPrefix()) {
+                console.error(new Error("logDirPrefix mismatch"), logId, entry.logId)
+            }
         } catch (err) {
             throw new Error(
                 `error reading entry log=${this.logName()} logId=${logId.base64()} entryNum=${entryNum} offset=${offset} length=${length}`,
@@ -113,48 +104,12 @@ export default class HotLog extends PersistedLog {
             const u8s: Uint8Array[] = []
             // keep track of the number of bytes expected to be written
             let writeBytes = 0
-            // keep track of logOffset for each logId as this may be incremented with multiple writes during a batch
-            const logOps = new Map<string, LogOpInfo>()
-            const globalOps: LogOp[] = []
+            // record offset for each entry
+            const offsets = []
             // add all items from queue to list of u8s to write
             for (const op of ops) {
                 // offset of entry from length of file + bytes written in current write
                 const entryOffset = this.byteLength + writeBytes
-                let logEntry: GlobalLogEntry | LogLogEntry
-                let logOpInfo: LogOpInfo | null = null
-                // this is a command entry for the global log
-                if (op.logId === null) {
-                    // global logs are ephemeral so they do not have a real entryNum
-                    logEntry = new LogLogEntry({ entry: op.entry, entryNum: 0 })
-                    globalOps.push({ offset: entryOffset, op: op, entry: logEntry })
-                }
-                // this is a log entry for a log log
-                else {
-                    const logIdBase64 = op.logId.base64()
-                    // create/get log offset for this logId
-                    if (!logOps.has(logIdBase64)) {
-                        logOps.set(logIdBase64, {
-                            logId: op.logId,
-                            maxEntryNum: this.server.getLog(op.logId).maxEntryNum(),
-                            ops: [],
-                        })
-                    }
-                    logOpInfo = logOps.get(logIdBase64)!
-                    if (op.entryNum === null) {
-                        op.entryNum = logOpInfo.maxEntryNum += 1
-                    }
-                    logEntry = new GlobalLogEntry({
-                        logId: op.logId,
-                        entryNum: op.entryNum,
-                        entry: op.entry,
-                    })
-                    // and entry to local index which will be merged to global index after write completes
-                    logOpInfo.ops.push({
-                        offset: entryOffset,
-                        op: op,
-                        entry: logEntry,
-                    })
-                }
                 let nextCheckpointOffset =
                     entryOffset > GLOBAL_LOG_CHECKPOINT_INTERVAL
                         ? entryOffset % GLOBAL_LOG_CHECKPOINT_INTERVAL === 0
@@ -164,15 +119,16 @@ export default class HotLog extends PersistedLog {
                               GLOBAL_LOG_CHECKPOINT_INTERVAL
                         : GLOBAL_LOG_CHECKPOINT_INTERVAL
                 // if this entry would cross a checkpoint boundary then add checkpoint
-                if (entryOffset < nextCheckpointOffset && entryOffset + logEntry.byteLength() > nextCheckpointOffset) {
+                if (entryOffset < nextCheckpointOffset && entryOffset + op.entry.byteLength() > nextCheckpointOffset) {
+                    offsets.push(entryOffset)
                     // length of buffer segment to write before checkpoint
                     const lastEntryOffset = nextCheckpointOffset - entryOffset
                     const checkpointEntry = new GlobalLogCheckpoint({
                         lastEntryOffset,
-                        lastEntryLength: logEntry.byteLength(),
+                        lastEntryLength: op.entry.byteLength(),
                     })
                     // use Buffer here because this will never run in browser
-                    const entryBuffer = Buffer.concat(logEntry.u8s())
+                    const entryBuffer = Buffer.concat(op.entry.u8s())
                     // add beginning segment of entry before checkpoint
                     const beginU8 = new Uint8Array(entryBuffer.buffer, entryBuffer.byteOffset, lastEntryOffset)
                     u8s.push(beginU8)
@@ -184,10 +140,10 @@ export default class HotLog extends PersistedLog {
                     const endU8 = new Uint8Array(
                         entryBuffer.buffer,
                         entryBuffer.byteOffset + lastEntryOffset,
-                        logEntry.byteLength() - lastEntryOffset,
+                        op.entry.byteLength() - lastEntryOffset,
                     )
                     u8s.push(endU8)
-                    writeBytes += logEntry.byteLength() - lastEntryOffset
+                    writeBytes += op.entry.byteLength() - lastEntryOffset
                 }
                 // if we are exactly at checkpoint boundary then add a checkpoint
                 else if (entryOffset === nextCheckpointOffset) {
@@ -200,18 +156,17 @@ export default class HotLog extends PersistedLog {
                     // add checkpoint entry
                     u8s.push(...checkpointEntry.u8s())
                     writeBytes += checkpointEntry.byteLength()
-                    // need to update the offset to include the checkpoint entry
-                    if (logOpInfo !== null) {
-                        logOpInfo.ops.at(-1)!.offset += checkpointEntry.byteLength()
-                    }
+                    // offset is after checkpoint
+                    offsets.push(entryOffset + checkpointEntry.byteLength())
                     // add entry
-                    u8s.push(...logEntry.u8s())
-                    writeBytes += logEntry.byteLength()
+                    u8s.push(...op.entry.u8s())
+                    writeBytes += op.entry.byteLength()
                 }
                 // otherwise add entry
                 else {
-                    u8s.push(...logEntry.u8s())
-                    writeBytes += logEntry.byteLength()
+                    offsets.push(entryOffset)
+                    u8s.push(...op.entry.u8s())
+                    writeBytes += op.entry.byteLength()
                 }
             }
 
@@ -240,20 +195,20 @@ export default class HotLog extends PersistedLog {
                 )
             }
 
-            for (const opInfo of globalOps) {
-                opInfo.op.bytesWritten = opInfo.entry.byteLength()
-                // resolves promise for op
-                opInfo.op.complete(opInfo.op)
+            if (ops.length !== offsets.length) {
+                throw new Error(`Offsets mismatch log=${this.logName()} ops=${ops.length} offsets=${offsets.length}`)
             }
 
-            for (const opInfo of logOps.values()) {
-                for (const op of opInfo.ops) {
-                    op.op.bytesWritten = op.entry.byteLength()
-                    this.addEntryToIndex(op.entry as GlobalLogEntry, op.offset)
-                    op.op.entry = op.entry
-                    // resolves promise for op
-                    op.op.complete(op.op)
+            for (let i = 0; i < ops.length; i++) {
+                const op = ops[i]
+                const offset = offsets[i]
+                op.bytesWritten = op.entry.byteLength()
+
+                if (op.entry instanceof GlobalLogEntry) {
+                    this.addEntryToIndex(op.entry, offset)
                 }
+
+                op.complete(op)
             }
         } catch (err) {
             // reject promises for all iOps
@@ -278,11 +233,11 @@ export default class HotLog extends PersistedLog {
     }
 
     addEntryToIndex(entry: GlobalLogEntry, entryOffset: number): void {
-        const persist = this.server.getLog(entry.logId)
+        const log = this.server.getLog(entry.logId)
         if (this.isNew) {
-            persist.addNewHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
+            log.addNewHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         } else {
-            persist.addOldHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
+            log.addOldHotLogEntry(entry.entry, entry.entryNum, entryOffset, entry.byteLength())
         }
     }
 }

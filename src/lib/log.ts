@@ -8,13 +8,13 @@ import LogEntry from "./entry/log-entry"
 import LogLogEntry from "./entry/log-log-entry"
 import LogConfig from "./log-config"
 import LogId from "./log-id"
+import AppendQueue from "./log/append-queue"
 import GlobalLogIndex from "./log/global-log-index"
 import LogIndex from "./log/log-index"
 import LogLogIndex from "./log/log-log-index"
 import LogStats from "./log/log-stats"
-import ReadConfigIOOperation from "./persist/io/read-config-io-operation"
 import ReadEntriesIOOperation from "./persist/io/read-entries-io-operation"
-import ReadHeadIOOperation from "./persist/io/read-head-io-operation"
+import ReadEntryIOOperation from "./persist/io/read-entry-io-operation"
 import WriteIOOperation from "./persist/io/write-io-operation"
 import LogLog from "./persist/log-log"
 import PersistedLog from "./persist/persisted-log"
@@ -30,13 +30,17 @@ export default class Log {
     creating: boolean = false
     stats: LogStats = new LogStats()
     config: LogConfig | null = null
+    appendInProgress: AppendQueue | null = null
+    appendQueue: AppendQueue
+    stopped: boolean = false
 
     constructor(server: Server, logId: LogId) {
         this.server = server
         this.logId = logId
+        this.appendQueue = new AppendQueue(this)
     }
 
-    async getLog(): Promise<LogLog> {
+    async getLogLog(): Promise<LogLog> {
         if (this.logLog === null) {
             this.logLog = new LogLog(this.server, this)
             await this.logLog.init()
@@ -44,8 +48,40 @@ export default class Log {
         return this.logLog
     }
 
-    async appendOp(target: PersistedLog, entry: LogEntry, entryNum: number | null = null): Promise<WriteIOOperation> {
-        let op = new WriteIOOperation(entry, entryNum, this.logId)
+    async stop() {
+        // TODO: persist this with SET_CONFIG but need to refactor LogConfig
+        this.stopped = true
+    }
+
+    /**
+     * Append using AppendQueue which handles replication and correctly align read head
+     * and read config operations with pending writes. Appends always go to HotLog.
+     */
+    async append(entry: LogEntry): Promise<GlobalLogEntry> {
+        entry = new GlobalLogEntry({
+            entry,
+            entryNum: this.nextEntryNum(),
+            logId: this.logId,
+        })
+        const appendQueue = this.appendQueue
+        appendQueue.enqueue(entry as GlobalLogEntry)
+        await appendQueue.promise
+        return entry as GlobalLogEntry
+    }
+
+    /**
+     * Do immediate append for flushing HotLog to LogLog and writing SetConfig for stop
+     */
+    async appendOp(target: PersistedLog, entry: LogEntry): Promise<WriteIOOperation> {
+        let op = new WriteIOOperation(entry, this.logId)
+        target.enqueueOp(op)
+        op = await op.promise
+        this.stats.addOp(op)
+        return op
+    }
+
+    async readEntryOp(target: PersistedLog, index: LogIndex, entryNum: number): Promise<ReadEntryIOOperation> {
+        let op = new ReadEntryIOOperation(this.logId, index, entryNum)
         target.enqueueOp(op)
         op = await op.promise
         this.stats.addOp(op)
@@ -54,22 +90,6 @@ export default class Log {
 
     async readEntriesOp(target: PersistedLog, index: LogIndex, entryNums: number[]): Promise<ReadEntriesIOOperation> {
         let op = new ReadEntriesIOOperation(this.logId, index, entryNums)
-        target.enqueueOp(op)
-        op = await op.promise
-        this.stats.addOp(op)
-        return op
-    }
-
-    async readConfigOp(target: PersistedLog, index: LogIndex): Promise<ReadConfigIOOperation> {
-        let op = new ReadConfigIOOperation(this.logId, index)
-        target.enqueueOp(op)
-        op = await op.promise
-        this.stats.addOp(op)
-        return op
-    }
-
-    async readHeadOp(target: PersistedLog, index: LogIndex): Promise<ReadHeadIOOperation> {
-        let op = new ReadHeadIOOperation(this.logId, index)
         target.enqueueOp(op)
         op = await op.promise
         this.stats.addOp(op)
@@ -89,7 +109,7 @@ export default class Log {
                     console.error("read op already processing", op)
                 }
                 // reads stay on old hot log but need the correct index
-                ;(op as ReadHeadIOOperation).index = this.oldHotLogIndex!
+                ;(op as ReadEntriesIOOperation).index = this.oldHotLogIndex!
                 this.server.persist.oldHotLog.ioQueue.enqueue(op)
             }
             for (const op of writes) {
@@ -107,7 +127,7 @@ export default class Log {
             return
         }
         // make sure LogLog is initialized
-        await this.getLog()
+        await this.getLogLog()
         const oldEntries = this.oldHotLogIndex.entries()
         const moveEntries = []
         const logLogMaxEntryNum =
@@ -128,7 +148,9 @@ export default class Log {
             if (op.entries === null) {
                 throw new Error("entries is null")
             }
-            const ops = op.entries.map((entry) => this.appendOp(this.logLog!, entry.entry, entry.entryNum))
+            const ops = op.entries.map((entry) =>
+                this.appendOp(this.logLog!, new LogLogEntry({ entry: entry.entry, entryNum: entry.entryNum })),
+            )
             await Promise.all(ops)
             // get/delete any current ops queued for old hot log
             const logQueue = this.server.persist.oldHotLog.ioQueue.deleteLogQueue(this.logId)
@@ -140,7 +162,7 @@ export default class Log {
                         console.error("read op already processing", op)
                     }
                     // reassign index for op - TODO: fix type hack
-                    ;(op as ReadHeadIOOperation).index = this.logLogIndex!
+                    ;(op as ReadEntriesIOOperation).index = this.logLogIndex!
                     this.logLog!.enqueueOp(op)
                 }
                 for (const op of writes) {
@@ -175,15 +197,6 @@ export default class Log {
         this.oldHotLogIndex = null
     }
 
-    async append(entry: LogEntry): Promise<GlobalLogEntry | LogLogEntry> {
-        const op = await this.appendOp(this.server.persist.newHotLog, entry)
-        if (op.entry instanceof GlobalLogEntry || op.entry instanceof LogLogEntry) {
-            return op.entry
-        } else {
-            throw new Error("Invalid entry type")
-        }
-    }
-
     async create(config: LogConfig) {
         if (this.creating) {
             throw new Error("already creating")
@@ -194,7 +207,7 @@ export default class Log {
         this.creating = true
         const entry = new CreateLogCommand({ value: config })
         try {
-            const op = this.appendOp(this.server.persist.newHotLog, entry)
+            const op = this.append(entry)
             this.config = config
         } catch (err) {
             throw err
@@ -225,9 +238,11 @@ export default class Log {
             return this.config
         }
         if (!this.hasGlobalConfig() && this.logLog === null) {
-            await this.getLog()
+            await this.getLogLog()
         }
-        const op = await this.readConfigOp(...this.readConfigTargetIndex())
+        // because config is cached it will always be loaded before any appends occur so
+        // no need to worry about pending appends here
+        const op = await this.readEntryOp(...this.readConfigTargetIndexEntryNum())
         if (op.entry === null) {
             throw new Error("entry is null")
         }
@@ -249,28 +264,13 @@ export default class Log {
         }
     }
 
-    readConfigTargetIndex(): [PersistedLog, LogIndex] {
-        // indexes should not have duplicates but make sure this is correct even if they do
-        let logLogConfigEntryNum: number | null = null
-        if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
-            ;[logLogConfigEntryNum] = this.logLogIndex.lastConfig()
-        }
+    readConfigTargetIndexEntryNum(): [PersistedLog, LogIndex, number] {
         if (this.newHotLogIndex !== null && this.newHotLogIndex.hasConfig()) {
-            const [configEntryNum] = this.newHotLogIndex.lastConfig()
-            if (logLogConfigEntryNum !== null && logLogConfigEntryNum >= configEntryNum) {
-                return [this.logLog!, this.logLogIndex!]
-            } else {
-                return [this.server.persist.newHotLog, this.newHotLogIndex]
-            }
+            return [this.server.persist.newHotLog, this.newHotLogIndex, this.newHotLogIndex.lastConfigEntryNum()]
         } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasConfig()) {
-            const [configEntryNum] = this.oldHotLogIndex.lastConfig()
-            if (logLogConfigEntryNum !== null && logLogConfigEntryNum >= configEntryNum) {
-                return [this.logLog!, this.logLogIndex!]
-            } else {
-                return [this.server.persist.oldHotLog, this.oldHotLogIndex]
-            }
+            return [this.server.persist.oldHotLog, this.oldHotLogIndex, this.oldHotLogIndex.lastConfigEntryNum()]
         } else if (this.logLogIndex !== null && this.logLogIndex.hasConfig()) {
-            return [this.logLog!, this.logLogIndex]
+            return [this.logLog!, this.logLogIndex, this.logLogIndex.lastConfigEntryNum()]
         } else {
             throw new Error("No config found")
         }
@@ -285,37 +285,28 @@ export default class Log {
     }
 
     async getHead(): Promise<GlobalLogEntry | LogLogEntry> {
-        const op = await this.readHeadOp(...this.readHeadTargetIndex())
-        if (op.entry === null) {
-            throw new Error("entry is null")
+        if (this.appendInProgress !== null && this.appendInProgress.hasEntries()) {
+            return await this.appendInProgress.waitHead()
+        } else if (this.appendQueue.hasEntries()) {
+            return await this.appendQueue.waitHead()
+        } else {
+            const op = await this.readEntryOp(...this.readHeadTargetIndexEntryNum())
+            if (op.entry === null) {
+                throw new Error("entry is null")
+            }
+            return op.entry
         }
-        return op.entry
     }
 
-    readHeadTargetIndex(): [PersistedLog, LogIndex] {
-        // indexes should not have duplicates but make sure this is correct even if they do
-        let logLogHeadEntryNum: number | null = null
-        if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
-            ;[logLogHeadEntryNum] = this.logLogIndex.lastEntry()
-        }
+    readHeadTargetIndexEntryNum(): [PersistedLog, LogIndex, number] {
         if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntries()) {
-            const [headEntryNum] = this.newHotLogIndex.lastEntry()
-            if (logLogHeadEntryNum !== null && logLogHeadEntryNum >= headEntryNum) {
-                return [this.logLog!, this.logLogIndex!]
-            } else {
-                return [this.server.persist.newHotLog, this.newHotLogIndex]
-            }
+            return [this.server.persist.newHotLog, this.newHotLogIndex, this.newHotLogIndex.maxEntryNum()]
         } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
-            const [headEntryNum] = this.oldHotLogIndex.lastEntry()
-            if (logLogHeadEntryNum !== null && logLogHeadEntryNum >= headEntryNum) {
-                return [this.logLog!, this.logLogIndex!]
-            } else {
-                return [this.server.persist.oldHotLog, this.oldHotLogIndex]
-            }
+            return [this.server.persist.oldHotLog, this.oldHotLogIndex, this.oldHotLogIndex.maxEntryNum()]
         } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
-            return [this.logLog!, this.logLogIndex]
+            return [this.logLog!, this.logLogIndex, this.logLogIndex.maxEntryNum()]
         } else {
-            throw new Error("No config found")
+            throw new Error("No entries found")
         }
     }
 
@@ -427,12 +418,21 @@ export default class Log {
             return this.oldHotLogIndex.maxEntryNum()
         } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
             return this.logLogIndex.maxEntryNum()
-        } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
-            return this.logLogIndex.maxEntryNum()
         } else {
             // if there are no entries return -1 so this will be incremented to zero for the first entry
             return -1
         }
+    }
+
+    nextEntryNum(): number {
+        let maxEntryNum = this.maxEntryNum()
+        if (this.appendInProgress !== null) {
+            maxEntryNum += this.appendInProgress.entries.length
+        }
+        if (this.appendQueue !== null) {
+            maxEntryNum += this.appendQueue.entries.length
+        }
+        return maxEntryNum + 1
     }
 
     addNewHotLogEntry(entry: LogEntry, entryNum: number, entryOffset: number, length: number) {
@@ -470,7 +470,17 @@ export default class Log {
 
     filename() {
         if (this.logId.logDirPrefix() !== LogId.newFromBase64(this.logId.base64()).logDirPrefix()) {
-            console.error("logId mismatch", this.logId, this.logId.logId.buffer)
+            const err = new Error("logId mismatch")
+            console.error(
+                err,
+                this.logId,
+                this.logId.logId.buffer,
+                LogId.newFromBase64(this.logId.base64()).logId.buffer,
+                this.logId.logDirPrefix(),
+                LogId.newFromBase64(this.logId.base64()).logDirPrefix(),
+                this.logId.base64(),
+                LogId.newFromBase64(this.logId.base64()).base64(),
+            )
         }
         return path.join(this.server.config.logDir!, this.logId.logDirPrefix(), `${this.logId.base64()}.log`)
     }

@@ -76,6 +76,13 @@ export default class LogIndex {
         return [this.lcNum!, this.lcOff!, this.lcLen!]
     }
 
+    lastConfigEntryNum(): number {
+        if (!this.hasConfig()) {
+            throw new Error("no last config")
+        }
+        return this.lcNum!
+    }
+
     hasEntries(): boolean {
         return this.en.length >= 3
     }

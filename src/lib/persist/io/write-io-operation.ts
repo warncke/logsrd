@@ -8,7 +8,7 @@ export default class WriteIOOperation extends IOOperation {
     entryNum: number | null = null
     bytesWritten = 0
 
-    constructor(entry: LogEntry, entryNum: number | null = null, logId: LogId | null = null) {
+    constructor(entry: LogEntry, logId: LogId | null = null, entryNum: number | null = null) {
         super(IOOperationType.WRITE, logId)
         this.entry = entry
         this.entryNum = entryNum

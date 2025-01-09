@@ -125,17 +125,20 @@ function readPost(res: HttpResponse, cb: (data: Uint8Array) => void, err: () => 
 
 async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
     const contentType = req.getHeader("content-type")
+
+    res.onAborted(() => {
+        res.aborted = true
+    })
+
     if (!contentType.startsWith("application/json")) {
+        if (res.aborted) return
+
         res.cork(() => {
             res.writeStatus("400")
             res.end(JSON_REQUIRED_ERROR)
         })
         return
     }
-
-    res.onAborted(() => {
-        res.aborted = true
-    })
 
     /* Read the body until done or error */
     readPost(
@@ -193,17 +196,19 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
 async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
     const logIdBase64 = req.getParameter(0)
 
+    res.onAborted(() => {
+        res.aborted = true
+    })
+
     if (!logIdBase64 || logIdBase64.length !== 22) {
+        if (res.aborted) return
+
         res.cork(() => {
             res.writeStatus("404")
             res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR }))
         })
         return
     }
-
-    res.onAborted(() => {
-        res.aborted = true
-    })
 
     /* Read the body until done or error */
     readPost(
@@ -249,7 +254,13 @@ async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
     const expectJSON = contentType.startsWith("application/json")
     const logIdBase64 = req.getParameter(0)
 
+    res.onAborted(() => {
+        res.aborted = true
+    })
+
     if (!logIdBase64 || logIdBase64.length !== 22) {
+        if (res.aborted) return
+
         res.cork(() => {
             res.writeStatus("404")
             expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
@@ -257,9 +268,6 @@ async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
         return
     }
 
-    res.onAborted(() => {
-        res.aborted = true
-    })
     try {
         const logId = LogId.newFromBase64(logIdBase64)
 
@@ -294,7 +302,13 @@ async function getHead(server: Server, res: uWS.HttpResponse, req: uWS.HttpReque
     const expectJSON = contentType.startsWith("application/json")
     const logIdBase64 = req.getParameter(0)
 
+    res.onAborted(() => {
+        res.aborted = true
+    })
+
     if (!logIdBase64 || logIdBase64.length !== 22) {
+        if (res.aborted) return
+
         res.cork(() => {
             res.writeStatus("404")
             expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
@@ -302,9 +316,6 @@ async function getHead(server: Server, res: uWS.HttpResponse, req: uWS.HttpReque
         return
     }
 
-    res.onAborted(() => {
-        res.aborted = true
-    })
     try {
         const logId = LogId.newFromBase64(logIdBase64)
 
@@ -336,7 +347,13 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
     const entryNums = req.getQuery("entryNums")
     const meta = req.getQuery("meta") === "true" ? true : false
 
+    res.onAborted(() => {
+        res.aborted = true
+    })
+
     if (!logIdBase64 || logIdBase64.length !== 22) {
+        if (res.aborted) return
+
         res.cork(() => {
             res.writeStatus("404")
             expectJSON ? res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR })) : res.end(INVALID_LOG_ID_ERROR)
@@ -344,9 +361,6 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
         return
     }
 
-    res.onAborted(() => {
-        res.aborted = true
-    })
     try {
         const logId = LogId.newFromBase64(logIdBase64)
         // TODO: this should be streaming instead of buffering everything

@@ -19,7 +19,7 @@ export default class LogStats {
 
     addOp(op: IOOperation) {
         const opTime = op.endTime - op.startTime
-        if (op.op in [IOOperationType.READ_HEAD, IOOperationType.READ_CONFIG, IOOperationType.READ_RANGE]) {
+        if (op.op in [IOOperationType.READ_ENTRY, IOOperationType.READ_ENTRIES, IOOperationType.READ_RANGE]) {
             this.ioReadTimeAvg = (this.ioReadTimeAvg * this.ioReads + opTime) / (this.ioReads + 1)
             this.ioReadTimeMax = Math.max(this.ioReadTimeMax, opTime)
             this.ioReadLastTime = op.endTime
