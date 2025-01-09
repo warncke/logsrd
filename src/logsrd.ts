@@ -80,7 +80,7 @@ async function run(): Promise<void> {
     })
 }
 
-function readPost(res: HttpResponse, cb: (data: Uint8Array) => void, err: () => any) {
+function readPost(res: HttpResponse, cb: (data: Uint8Array) => void) {
     let buffer: Buffer
     /* Register data cb */
     res.onData((ab, isLast) => {
@@ -118,9 +118,6 @@ function readPost(res: HttpResponse, cb: (data: Uint8Array) => void, err: () => 
             }
         }
     })
-
-    /* Register error cb */
-    res.onAborted(err)
 }
 
 async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
@@ -141,56 +138,50 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
     }
 
     /* Read the body until done or error */
-    readPost(
-        res,
-        async (data: Uint8Array) => {
+    readPost(res, async (data: Uint8Array) => {
+        if (res.aborted) return
+
+        if (data.length > MAX_ENTRY_SIZE) {
+            res.cork(() => {
+                res.writeStatus("400")
+                res.end(MAX_POST_SIZE_ERROR)
+            })
+            return
+        }
+        let jsonObj: any
+        try {
+            jsonObj = JSON.parse(new TextDecoder().decode(data))
+        } catch (err: any) {
+            res.cork(() => {
+                res.writeStatus("400")
+                res.end(INVALID_JSON_POST_ERROR)
+            })
+            return
+        }
+        try {
+            const config = await server.createLog(jsonObj)
+
             if (res.aborted) return
 
-            if (data.length > MAX_ENTRY_SIZE) {
+            if (config === null) {
                 res.cork(() => {
                     res.writeStatus("400")
-                    res.end(MAX_POST_SIZE_ERROR)
+                    res.end(JSON.stringify({ error: LOG_CREATE_ERROR }))
                 })
-                return
-            }
-            let jsonObj: any
-            try {
-                jsonObj = JSON.parse(new TextDecoder().decode(data))
-            } catch (err: any) {
+            } else {
                 res.cork(() => {
-                    res.writeStatus("400")
-                    res.end(INVALID_JSON_POST_ERROR)
-                })
-                return
-            }
-            try {
-                const config = await server.createLog(jsonObj)
-
-                if (res.aborted) return
-
-                if (config === null) {
-                    res.cork(() => {
-                        res.writeStatus("400")
-                        res.end(JSON.stringify({ error: LOG_CREATE_ERROR }))
-                    })
-                } else {
-                    res.cork(() => {
-                        res.end(JSON.stringify(config))
-                    })
-                }
-            } catch (err: any) {
-                if (res.aborted) return
-
-                res.cork(() => {
-                    res.writeStatus("400")
-                    res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                    res.end(JSON.stringify(config))
                 })
             }
-        },
-        () => {
-            // invalid json or no data res is aborted now so no response can be given
-        },
-    )
+        } catch (err: any) {
+            if (res.aborted) return
+
+            res.cork(() => {
+                res.writeStatus("400")
+                res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+            })
+        }
+    })
 }
 
 async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
@@ -211,42 +202,36 @@ async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
     }
 
     /* Read the body until done or error */
-    readPost(
-        res,
-        async (data: Uint8Array) => {
+    readPost(res, async (data: Uint8Array) => {
+        if (res.aborted) return
+
+        if (data.length > MAX_ENTRY_SIZE) {
+            res.cork(() => {
+                res.writeStatus("400")
+                res.end(MAX_POST_SIZE_ERROR)
+            })
+            return
+        }
+
+        try {
+            const logId = LogId.newFromBase64(logIdBase64)
+
+            const entry = await server.appendLog(logId, data)
+
             if (res.aborted) return
 
-            if (data.length > MAX_ENTRY_SIZE) {
-                res.cork(() => {
-                    res.writeStatus("400")
-                    res.end(MAX_POST_SIZE_ERROR)
-                })
-                return
-            }
+            res.cork(() => {
+                res.end(JSON.stringify({ entryNum: entry.entryNum, crc: entry.cksumNum }))
+            })
+        } catch (err: any) {
+            if (res.aborted) return
 
-            try {
-                const logId = LogId.newFromBase64(logIdBase64)
-
-                const entry = await server.appendLog(logId, data)
-
-                if (res.aborted) return
-
-                res.cork(() => {
-                    res.end(JSON.stringify({ entryNum: entry.entryNum, crc: entry.cksumNum }))
-                })
-            } catch (err: any) {
-                if (res.aborted) return
-
-                res.cork(() => {
-                    res.writeStatus("400")
-                    res.end(JSON.stringify({ error: err.message, stack: err.stack }))
-                })
-            }
-        },
-        () => {
-            // res aborted - no response possible
-        },
-    )
+            res.cork(() => {
+                res.writeStatus("400")
+                res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+            })
+        }
+    })
 }
 
 async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
