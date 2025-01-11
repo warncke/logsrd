@@ -1,11 +1,14 @@
+import CreateLogCommand from "../entry/command/create-log-command"
 import SetConfigCommand from "../entry/command/set-config-command"
 import GlobalLogEntry from "../entry/global-log-entry"
 import Log from "../log"
+import LogConfig from "../log-config"
 import WriteIOOperation from "../persist/io/write-io-operation"
 
 type AppendQueueEntry = {
     entry: GlobalLogEntry
     op: WriteIOOperation
+    config: LogConfig | null
 }
 
 export default class AppendQueue {
@@ -24,13 +27,13 @@ export default class AppendQueue {
         })
     }
 
-    enqueue(entry: GlobalLogEntry) {
-        if (entry.entry instanceof SetConfigCommand) {
+    enqueue(entry: GlobalLogEntry, config: LogConfig | null = null) {
+        if (config !== null) {
             this.lastConfig = entry
         }
         // TODO: WriteIOOperation should be refactored to support multiple entries
         const op = new WriteIOOperation(entry, this.log.logId)
-        this.entries.push({ entry, op })
+        this.entries.push({ entry, op, config })
         this.process()
     }
 
@@ -47,14 +50,37 @@ export default class AppendQueue {
         // set this queue to in progress and create new queue for subsequent appends
         this.log.appendInProgress = this
         this.log.appendQueue = new AppendQueue(this.log)
-        // replicate and persist
         try {
-            // TODO: replication
-            // append all entries to HotLog
-            const ops = this.entries.map((entry) => entry.op)
-            this.log.server.persist.newHotLog.enqueueOps(ops)
-            // wait for all ops to complete
-            await Promise.all(ops.map((op) => op.promise))
+            // do replication if any replicas
+            const replicatePromises = []
+            for (const entry of this.entries) {
+                let lastConfig: LogConfig | null = null
+                let replicas
+                if (entry.config !== null) {
+                    replicas = entry.config.replicas
+                    lastConfig = entry.config
+                } else if (lastConfig !== null) {
+                    replicas = (lastConfig as LogConfig).replicas
+                } else if (this.log.config !== null) {
+                    replicas = this.log.config.replicas
+                } else {
+                    throw new Error("No config")
+                }
+                for (const host of replicas) {
+                    replicatePromises.push(this.log.server.replicate.appendReplica(host, entry.entry))
+                }
+            }
+            if (replicatePromises.length > 0) {
+                await Promise.all(replicatePromises)
+            }
+            // persist
+            await Promise.all(
+                this.entries.map((entry) => {
+                    this.log.server.persist.newHotLog.enqueueOp(entry.op)
+                    entry.op.promise.then((op) => this.log.stats.addOp(op))
+                    return entry.op.promise
+                }),
+            )
             // resolve promise - everything calling waitHead or waitConfig will now resolve with correct entry
             this.complete()
             // clear this queue now that it is complete

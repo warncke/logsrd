@@ -19,6 +19,10 @@ export default class GlobalLogEntry extends LogEntry {
         this.crc = crc ? crc : null
     }
 
+    key(): string {
+        return `${this.logId.base64()}-${this.entryNum}`
+    }
+
     byteLength(): number {
         return GLOBAL_LOG_PREFIX_BYTE_LENGTH + this.entry.byteLength()
     }

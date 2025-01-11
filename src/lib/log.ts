@@ -57,14 +57,14 @@ export default class Log {
      * Append using AppendQueue which handles replication and correctly align read head
      * and read config operations with pending writes. Appends always go to HotLog.
      */
-    async append(entry: LogEntry): Promise<GlobalLogEntry> {
+    async append(entry: LogEntry, config: LogConfig | null = null): Promise<GlobalLogEntry> {
         entry = new GlobalLogEntry({
             entry,
             entryNum: this.nextEntryNum(),
             logId: this.logId,
         })
         const appendQueue = this.appendQueue
-        appendQueue.enqueue(entry as GlobalLogEntry)
+        appendQueue.enqueue(entry as GlobalLogEntry, config)
         await appendQueue.promise
         return entry as GlobalLogEntry
     }
@@ -72,7 +72,7 @@ export default class Log {
     /**
      * Do immediate append for flushing HotLog to LogLog and writing SetConfig for stop
      */
-    async appendOp(target: PersistedLog, entry: LogEntry): Promise<WriteIOOperation> {
+    async appendOp(target: PersistedLog, entry: GlobalLogEntry | LogLogEntry): Promise<WriteIOOperation> {
         let op = new WriteIOOperation(entry, this.logId)
         target.enqueueOp(op)
         op = await op.promise
@@ -207,7 +207,7 @@ export default class Log {
         this.creating = true
         const entry = new CreateLogCommand({ value: config })
         try {
-            const op = this.append(entry)
+            const op = await this.append(entry, config)
             this.config = config
         } catch (err) {
             throw err

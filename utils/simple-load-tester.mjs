@@ -75,7 +75,11 @@ async function testIteration() {
     const { statusCode, body } = await request("http://127.0.0.1:7000/log", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: '{"type":"json"}',
+        body: JSON.stringify({
+            type: "json",
+            host: "127.0.0.1:7000",
+            replicas: ["127.0.0.1:7001", "127.0.0.1:7002"],
+        }),
         dispatcher,
     })
 

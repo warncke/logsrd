@@ -1,15 +1,18 @@
 import uWS, { HttpResponse } from "uWebSockets.js"
 
-import { MAX_ENTRY_SIZE } from "./lib/globals"
+import GlobalLogEntryFactory from "./lib/entry/global-log-entry-factory"
+import { GLOBAL_LOG_PREFIX_BYTE_LENGTH, MAX_ENTRY_SIZE } from "./lib/globals"
 import LogId from "./lib/log-id"
-import Persist from "./lib/persist"
-import Replicate from "./lib/replicate"
 import Server from "./lib/server"
 
 const dataDir = process.env.DATA_DIR || "./data"
 const host = process.env.HOST || "127.0.0.1"
+const hosts = (process.env.HOSTS || "127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002").split(" ")
+const hostMonitorInterval = parseInt(process.env.HOST_MONITOR_INTERVAL || "10000")
 const port = parseInt(process.env.PORT || "7000")
-const secret = process.env.SECRET || "secret"
+const replicatePath = process.env.REPLICATE_PATH || "/replicate"
+const replicateTimeout = parseInt(process.env.REPLICATE_TIMEOUT || "3000")
+const secret = process.env.SERVER_SECRET || "secret"
 const version = "0.0.1"
 
 run().catch(console.error)
@@ -34,11 +37,16 @@ async function run(): Promise<void> {
         pageSize: 4096,
         globalIndexCountLimit: 100_000,
         globalIndexSizeLimit: 1024 * 1024 * 100,
+        hosts,
+        hostMonitorInterval,
+        replicatePath,
+        replicateTimeout,
+        secret,
     }
     const server = new Server(config)
     await server.init()
 
-    const logsrd = uWS.App({})
+    const logsrd = uWS.App()
 
     /* Public Routes */
 
@@ -47,6 +55,59 @@ async function run(): Promise<void> {
     logsrd.get("/log/:logid/config", (res, req) => getConfig(server, res, req))
     logsrd.get("/log/:logid/head", (res, req) => getHead(server, res, req))
     logsrd.get("/log/:logid/entries", (res, req) => getEntries(server, res, req))
+
+    /* replication WebSocket */
+    logsrd.ws(`/${replicatePath}`, {
+        compression: 0,
+        idleTimeout: 60,
+        maxLifetime: 0,
+        maxPayloadLength: MAX_ENTRY_SIZE + GLOBAL_LOG_PREFIX_BYTE_LENGTH,
+
+        upgrade: (res, req, context) => {
+            if (req.getHeader("x-server-secret") !== secret) {
+                res.cork(() => {
+                    res.writeStatus("404")
+                    res.end("Not found")
+                })
+                return
+            }
+
+            res.upgrade(
+                {},
+                req.getHeader("sec-websocket-key"),
+                req.getHeader("sec-websocket-protocol"),
+                req.getHeader("sec-websocket-extensions"),
+                context,
+            )
+        },
+        open: (ws) => {
+            // nothing to do here yet
+        },
+        message: async (ws, message, isBinary) => {
+            // for binary all incoming messages must be global log entries
+            if (isBinary) {
+                let entry
+                try {
+                    entry = GlobalLogEntryFactory.fromU8(new Uint8Array(message.slice()))
+                } catch (err: any) {
+                    ws.send(`err:unknown:${err.message}`)
+                    return
+                }
+                try {
+                    entry = await server.appendReplica(entry)
+                    ws.send(`ok:${entry.key()}`)
+                } catch (err: any) {
+                    ws.send(`err:${entry.key()}:${err.message}`)
+                }
+            }
+        },
+        drain: (ws) => {
+            // unsafely ignore this for now
+        },
+        close: (ws, code, message) => {
+            // nothing to do here yet
+        },
+    })
 
     /* Get current version from server */
     logsrd.get("/version", async (res) => {

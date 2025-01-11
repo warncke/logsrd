@@ -1,7 +1,9 @@
 import path from "node:path"
 
 import BinaryLogEntry from "./entry/binary-log-entry"
+import CreateLogCommand from "./entry/command/create-log-command"
 import GlobalLogEntry from "./entry/global-log-entry"
+import GlobalLogEntryFactory from "./entry/global-log-entry-factory"
 import JSONLogEntry from "./entry/json-log-entry"
 import LogLogEntry from "./entry/log-log-entry"
 import { DEFAULT_HOT_LOG_FILE_NAME, MAX_RESPONSE_ENTRIES } from "./globals"
@@ -20,6 +22,11 @@ export type ServerConfig = {
     hotLogFileName?: string
     blobDir?: string
     logDir?: string
+    hosts: string[]
+    hostMonitorInterval: number
+    replicatePath: string
+    replicateTimeout: number
+    secret: string
 }
 
 export default class Server {
@@ -68,6 +75,27 @@ export default class Server {
         // cksum was not performed - unknown error
         if (entry.cksumNum === 0) {
             throw new Error("cksum error")
+        }
+
+        return entry
+    }
+
+    async appendReplica(entry: GlobalLogEntry): Promise<GlobalLogEntry> {
+        if (entry.entry instanceof CreateLogCommand) {
+            if (this.logs.has(entry.logId.base64())) {
+                throw new Error(`Log already exists: ${entry.logId.base64()}`)
+            }
+            const log = new Log(this, entry.logId)
+            log.config = new LogConfig(entry.entry.value())
+            await log.appendOp(this.persist.newHotLog, entry)
+            this.logs.set(entry.logId.base64(), log)
+        }
+        // TODO: handle set config which may start a new partial log on replica
+        else {
+            const config = await this.getConfig(entry.logId)
+            // TODO: validation
+            const log = this.getLog(entry.logId)
+            await log.appendOp(this.persist.newHotLog, entry)
         }
 
         return entry
