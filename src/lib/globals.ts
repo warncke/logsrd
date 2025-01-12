@@ -7,7 +7,6 @@ import GlobalLogEntry from "./entry/global-log-entry"
 import JSONLogEntry from "./entry/json-log-entry"
 import LogLogCheckpoint from "./entry/log-log-checkpoint"
 import LogLogEntry from "./entry/log-log-entry"
-import LogId from "./log-id"
 import ReadEntriesIOOperation from "./persist/io/read-entries-io-operation"
 import ReadEntryIOOperation from "./persist/io/read-entry-io-operation"
 import ReadRangeIOOperation from "./persist/io/read-range-io-operation"
@@ -78,21 +77,6 @@ export const ENTRY_CLASS: { [index: number]: ENTRY_TYPE_CLASSES } = {
     [EntryType.JSON]: JSONLogEntry,
 }
 
-/**
- * Every log has a type which is included in the config JSON
- */
-export const enum LogType {
-    BINARY = "binary",
-    JSON = "json",
-    GLOBAL = "global",
-}
-
-export const LOG_TYPE_MAP: { [index: string]: LogType } = {
-    binary: LogType.BINARY,
-    json: LogType.JSON,
-    global: LogType.GLOBAL,
-}
-
 export enum IOOperationType {
     READ_ENTRY,
     READ_ENTRIES,
@@ -109,13 +93,6 @@ export class AbortWriteError extends Error {
     constructor() {
         super("Write Aborted")
     }
-}
-
-export interface ILogConfig {
-    logId: LogId
-    master: string
-    replicas: string[]
-    type: LogType
 }
 
 /**

@@ -105,10 +105,7 @@ export default class Server {
         const logId = await LogId.newRandom()
         config.logId = logId.base64()
         config.master = this.config.host
-        if (!config.type) {
-            config.type = "json"
-        }
-        config = new LogConfig(config)
+        config = await LogConfig.newFromJSON(config)
         await this.getLog(logId).create(config)
         return config
     }

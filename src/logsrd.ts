@@ -7,7 +7,7 @@ import Server from "./lib/server"
 
 const dataDir = process.env.DATA_DIR || "./data"
 const host = process.env.HOST || "127.0.0.1"
-const hosts = (process.env.HOSTS || "127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002").split(" ")
+const hosts = (process.env.HOSTS || "").split(" ").filter((host) => host.length > 0)
 const hostMonitorInterval = parseInt(process.env.HOST_MONITOR_INTERVAL || "10000")
 const port = parseInt(process.env.PORT || "7000")
 const replicatePath = process.env.REPLICATE_PATH || "/replicate"
@@ -88,7 +88,7 @@ async function run(): Promise<void> {
             if (isBinary) {
                 let entry
                 try {
-                    entry = GlobalLogEntryFactory.fromU8(new Uint8Array(message.slice()))
+                    entry = GlobalLogEntryFactory.fromU8(new Uint8Array(message.slice(0)))
                 } catch (err: any) {
                     ws.send(`err:unknown:${err.message}`)
                     return
@@ -209,9 +209,13 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
             })
             return
         }
-        let jsonObj: any
+        let config: any
         try {
-            jsonObj = JSON.parse(new TextDecoder().decode(data))
+            if (data.length === 0) {
+                config = {}
+            } else {
+                config = JSON.parse(new TextDecoder().decode(data))
+            }
         } catch (err: any) {
             res.cork(() => {
                 res.writeStatus("400")
@@ -220,7 +224,7 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
             return
         }
         try {
-            const config = await server.createLog(jsonObj)
+            config = await server.createLog(config)
 
             if (res.aborted) return
 
@@ -239,7 +243,11 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
 
             res.cork(() => {
                 res.writeStatus("400")
-                res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                const ret: any = { error: err.message, stack: err.stack }
+                if (err.errors) {
+                    ret.schemaErrors = err.errors.map((err: any) => err.message)
+                }
+                res.end(JSON.stringify(ret))
             })
         }
     })

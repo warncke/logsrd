@@ -1,5 +1,3 @@
-import CreateLogCommand from "../entry/command/create-log-command"
-import SetConfigCommand from "../entry/command/set-config-command"
 import GlobalLogEntry from "../entry/global-log-entry"
 import Log from "../log"
 import LogConfig from "../log-config"
@@ -60,14 +58,17 @@ export default class AppendQueue {
                     replicas = entry.config.replicas
                     lastConfig = entry.config
                 } else if (lastConfig !== null) {
-                    replicas = (lastConfig as LogConfig).replicas
+                    // TODO
+                    // replicas = (lastConfig as GlobalLogEntry).entry.value().replicas
                 } else if (this.log.config !== null) {
                     replicas = this.log.config.replicas
                 } else {
                     throw new Error("No config")
                 }
-                for (const host of replicas) {
-                    replicatePromises.push(this.log.server.replicate.appendReplica(host, entry.entry))
+                if (replicas && replicas.length > 0) {
+                    for (const host of replicas) {
+                        replicatePromises.push(this.log.server.replicate.appendReplica(host, entry.entry))
+                    }
                 }
             }
             if (replicatePromises.length > 0) {

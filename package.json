@@ -9,6 +9,9 @@
   },
   "dependencies": {
     "@node-rs/crc32": "1.10.6",
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "ajv-formats-draft2019": "1.6.1",
     "bufferutil": "4.0.9",
     "chai": "5.1.2",
     "chai-as-promised": "8.0.1",
