@@ -13,13 +13,8 @@ export interface ILogConfig {
     adminToken?: string
     readToken?: string
     writeToken?: string
-    readWriteToken?: string
+    jwtProperties?: string[]
     jwtSecret?: string
-    accessJWTSecret?: string
-    adminJWTSecret?: string
-    readJWTSecret?: string
-    writeJWTSecret?: string
-    readWriteJWTSecret?: string
     stopped: boolean
 }
 
@@ -79,31 +74,14 @@ export const LogConfigSchema: JSONSchemaType<ILogConfig> = {
             type: "string",
             nullable: true,
         },
-        readWriteToken: {
-            type: "string",
+        jwtProperties: {
+            type: "array",
+            items: {
+                type: "string",
+            },
             nullable: true,
         },
         jwtSecret: {
-            type: "string",
-            nullable: true,
-        },
-        accessJWTSecret: {
-            type: "string",
-            nullable: true,
-        },
-        adminJWTSecret: {
-            type: "string",
-            nullable: true,
-        },
-        readJWTSecret: {
-            type: "string",
-            nullable: true,
-        },
-        writeJWTSecret: {
-            type: "string",
-            nullable: true,
-        },
-        readWriteJWTSecret: {
             type: "string",
             nullable: true,
         },
@@ -145,13 +123,8 @@ export default class LogConfig implements ILogConfig {
     adminToken?: string
     readToken?: string
     writeToken?: string
-    readWriteToken?: string
+    jwtProperties?: string[]
     jwtSecret?: string
-    accessJWTSecret?: string
-    adminJWTSecret?: string
-    readJWTSecret?: string
-    writeJWTSecret?: string
-    readWriteJWTSecret?: string
     // @ts-ignore
     stopped: boolean
 
@@ -162,37 +135,20 @@ export default class LogConfig implements ILogConfig {
     async setDefaults() {
         if (this.authType === "token") {
             // if authType is token then no jwtSecrets should be provided
-            if (
-                this.jwtSecret ||
-                this.accessJWTSecret ||
-                this.adminJWTSecret ||
-                this.readJWTSecret ||
-                this.writeJWTSecret ||
-                this.readWriteJWTSecret
-            ) {
+            if (this.jwtSecret) {
                 throw new Error("jwtSecrets should not be provided when authType is token")
             }
             // unless all of the access token varients are specified need a base accessToken
-            if (
-                !this.accessToken &&
-                (!this.adminToken || !this.readToken || !this.writeToken || !this.readWriteToken)
-            ) {
+            if (!this.accessToken && (!this.adminToken || !this.readToken || !this.writeToken)) {
                 this.accessToken = Buffer.from(await crypto.randomBytes(32)).toString("base64")
             }
         } else if (this.authType === "jwt") {
             // if authType is jwt then no accessTokens should be provided
-            if (this.accessToken || this.adminToken || this.readToken || this.writeToken || this.readWriteToken) {
+            if (this.accessToken || this.adminToken || this.readToken || this.writeToken) {
                 throw new Error("accessTokens should not be provided when authType is jwt")
             }
             // unless all of the jwt varients are specified need a base jwtSecret
-            if (
-                !this.jwtSecret &&
-                (!this.accessJWTSecret ||
-                    !this.adminJWTSecret ||
-                    !this.readJWTSecret ||
-                    !this.writeJWTSecret ||
-                    !this.readWriteJWTSecret)
-            ) {
+            if (!this.jwtSecret) {
                 this.jwtSecret = Buffer.from(await crypto.randomBytes(32)).toString("base64")
             }
         } else {
