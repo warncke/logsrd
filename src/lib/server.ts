@@ -3,13 +3,13 @@ import path from "node:path"
 import BinaryLogEntry from "./entry/binary-log-entry"
 import CreateLogCommand from "./entry/command/create-log-command"
 import GlobalLogEntry from "./entry/global-log-entry"
-import GlobalLogEntryFactory from "./entry/global-log-entry-factory"
 import JSONLogEntry from "./entry/json-log-entry"
 import LogLogEntry from "./entry/log-log-entry"
 import { DEFAULT_HOT_LOG_FILE_NAME, MAX_RESPONSE_ENTRIES } from "./globals"
 import Log from "./log"
-import LogConfig from "./log-config"
-import LogId from "./log-id"
+import { AccessAllowed } from "./log/access"
+import LogConfig from "./log/log-config"
+import LogId from "./log/log-id"
 import Persist from "./persist"
 import Replicate from "./replicate"
 
@@ -59,9 +59,14 @@ export default class Server {
         await this.persist.init()
     }
 
-    async appendLog(logId: LogId, data: Uint8Array): Promise<GlobalLogEntry | LogLogEntry> {
-        const config = await this.getConfig(logId)
-        // TODO: add support for command entries
+    async appendLog(logId: LogId, token: string | null, data: Uint8Array): Promise<GlobalLogEntry> {
+        const log = this.getLog(logId)
+        const config = await log.getConfig()
+
+        if (!(await log.access.allowWrite(token))) {
+            throw new Error("Access denied")
+        }
+
         let entry
         if (config.type === "json") {
             entry = new JSONLogEntry({ jsonU8: data })
@@ -87,40 +92,65 @@ export default class Server {
             }
             const log = new Log(this, entry.logId)
             log.config = new LogConfig(entry.entry.value())
-            await log.appendOp(this.persist.newHotLog, entry)
             this.logs.set(entry.logId.base64(), log)
+            await log.appendOp(this.persist.newHotLog, entry)
         }
         // TODO: handle set config which may start a new partial log on replica
         else {
-            const config = await this.getConfig(entry.logId)
-            // TODO: validation
             const log = this.getLog(entry.logId)
+            const config = await log.getConfig()
+            // TODO: validation
             await log.appendOp(this.persist.newHotLog, entry)
         }
 
         return entry
     }
 
-    async createLog(config: any): Promise<LogConfig> {
-        const logId = await LogId.newRandom()
-        config.logId = logId.base64()
-        config.master = this.config.host
+    async createLog(config: any): Promise<GlobalLogEntry> {
+        let logId
+        if (config.logId) {
+            throw new Error("Setting logId not allowed. Random logId will be provided.")
+        } else {
+            logId = await LogId.newRandom()
+            config.logId = logId.base64()
+        }
+        if (config.master) {
+            if (config.master !== this.config.host) {
+                throw new Error(`config.master must be host ${this.config.host}`)
+            }
+        } else {
+            config.master = this.config.host
+        }
         config = await LogConfig.newFromJSON(config)
-        await this.getLog(logId).create(config)
-        return config
+        const entry = await this.getLog(logId).create(config)
+        return entry
     }
 
-    async getConfig(logId: LogId): Promise<LogConfig> {
-        let config = await this.getLog(logId).getConfig()
-        return config
+    async getConfig(
+        logId: LogId,
+        token: string | null,
+    ): Promise<{ allowed: AccessAllowed; entry: GlobalLogEntry | LogLogEntry }> {
+        const log = this.getLog(logId)
+        const config = await log.getConfig()
+        const allowed = await log.access.allowed(token)
+        if (!allowed.admin) {
+            throw new Error("Access denied")
+        }
+        const entry = await log.getConfigEntry()
+        return { allowed, entry }
     }
 
     async getEntries(
         logId: LogId,
+        token: string | null,
         entryNums: string | number[] | undefined,
         offset: string | number | undefined,
         limit: string | number | undefined,
-    ): Promise<Array<GlobalLogEntry | LogLogEntry>> {
+    ): Promise<{ allowed: AccessAllowed; entries: Array<GlobalLogEntry | LogLogEntry> }> {
+        const log = this.getLog(logId)
+        const config = await log.getConfig()
+        const allowed = await log.access.allowed(token)
+
         if (typeof entryNums === "string" && entryNums.length > 0) {
             entryNums = entryNums
                 .split(",")
@@ -132,7 +162,10 @@ export default class Server {
             if (entryNums!.length > MAX_RESPONSE_ENTRIES) {
                 throw new Error(`Maximum number of entries is ${MAX_RESPONSE_ENTRIES}`)
             }
-            return this.getLog(logId).getEntryNums(entryNums)
+            return {
+                allowed,
+                entries: await this.getLog(logId).getEntryNums(entryNums),
+            }
         } else {
             if (typeof offset === "string" && offset.length > 0) {
                 offset = parseInt(offset)
@@ -154,16 +187,26 @@ export default class Server {
                 limit = MAX_RESPONSE_ENTRIES
             }
             const config = await this.getLog(logId).getConfig()
-            return this.getLog(logId).getEntries(offset, limit)
+            return {
+                allowed,
+                entries: await this.getLog(logId).getEntries(offset, limit),
+            }
         }
     }
 
-    async getHead(logId: LogId): Promise<GlobalLogEntry | LogLogEntry> {
-        const config = await this.getLog(logId).getConfig()
-        const entry = await this.getLog(logId).getHead()
-
-        // TODO
-        return entry
+    async getHead(
+        logId: LogId,
+        token: string | null,
+    ): Promise<{ allowed: AccessAllowed; entry: GlobalLogEntry | LogLogEntry }> {
+        const log = this.getLog(logId)
+        const config = await log.getConfig()
+        const allowed = await log.access.allowed(token)
+        // head may be either a command which requires admin or an entry which requires read
+        if (!allowed.read && !allowed.admin) {
+            throw new Error("Access denied")
+        }
+        const entry = await log.getHead()
+        return { allowed, entry }
     }
 
     async deleteLog(logId: LogId): Promise<boolean> {

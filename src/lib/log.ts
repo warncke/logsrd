@@ -6,10 +6,11 @@ import CreateLogCommand from "./entry/command/create-log-command"
 import GlobalLogEntry from "./entry/global-log-entry"
 import LogEntry from "./entry/log-entry"
 import LogLogEntry from "./entry/log-log-entry"
-import LogConfig from "./log-config"
-import LogId from "./log-id"
+import Access from "./log/access"
 import AppendQueue from "./log/append-queue"
 import GlobalLogIndex from "./log/global-log-index"
+import LogConfig from "./log/log-config"
+import LogId from "./log/log-id"
 import LogIndex from "./log/log-index"
 import LogLogIndex from "./log/log-log-index"
 import LogStats from "./log/log-stats"
@@ -23,6 +24,7 @@ import Server from "./server"
 export default class Log {
     server: Server
     logId: LogId
+    access: Access
     newHotLogIndex: GlobalLogIndex | null = null
     oldHotLogIndex: GlobalLogIndex | null = null
     logLogIndex: LogLogIndex | null = null
@@ -37,6 +39,7 @@ export default class Log {
     constructor(server: Server, logId: LogId) {
         this.server = server
         this.logId = logId
+        this.access = new Access(this)
         this.appendQueue = new AppendQueue(this)
     }
 
@@ -197,7 +200,7 @@ export default class Log {
         this.oldHotLogIndex = null
     }
 
-    async create(config: LogConfig) {
+    async create(config: LogConfig): Promise<GlobalLogEntry> {
         if (this.creating) {
             throw new Error("already creating")
         }
@@ -205,10 +208,10 @@ export default class Log {
             throw new Error("already exists")
         }
         this.creating = true
-        const entry = new CreateLogCommand({ value: config })
         try {
-            const op = await this.append(entry, config)
+            const entry = await this.append(new CreateLogCommand({ value: config }), config)
             this.config = config
+            return entry
         } catch (err) {
             throw err
         } finally {
@@ -217,12 +220,7 @@ export default class Log {
     }
 
     async exists(): Promise<boolean> {
-        if (
-            this.logLogIndex !== null ||
-            this.newHotLogIndex !== null ||
-            this.oldHotLogIndex !== null ||
-            this.logLogIndex !== null
-        ) {
+        if (this.logLogIndex !== null || this.newHotLogIndex !== null || this.oldHotLogIndex !== null) {
             return true
         }
         try {
@@ -252,6 +250,20 @@ export default class Log {
             throw new Error("Invalid entry type for config")
         }
         return this.config
+    }
+
+    async getConfigEntry(): Promise<GlobalLogEntry | LogLogEntry> {
+        if (this.appendInProgress !== null && this.appendInProgress.hasConfig()) {
+            return this.appendInProgress.waitConfig()
+        } else if (this.appendQueue.hasConfig()) {
+            return this.appendQueue.waitConfig()
+        } else {
+            const op = await this.readEntryOp(...this.readConfigTargetIndexEntryNum())
+            if (op.entry === null) {
+                throw new Error("entry is null")
+            }
+            return op.entry
+        }
     }
 
     hasGlobalConfig(): boolean {

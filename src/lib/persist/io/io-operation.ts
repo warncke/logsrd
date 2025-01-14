@@ -1,5 +1,5 @@
 import { IOOperationType } from "../../globals"
-import LogId from "../../log-id"
+import LogId from "../../log/log-id"
 
 // global ordering for IO operations
 let GLOBAL_ORDER = 0

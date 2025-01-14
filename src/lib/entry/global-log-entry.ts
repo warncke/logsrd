@@ -1,5 +1,5 @@
 import { EntryType, GLOBAL_LOG_PREFIX_BYTE_LENGTH } from "../globals"
-import LogId from "../log-id"
+import LogId from "../log/log-id"
 import LogEntry from "./log-entry"
 
 const TYPE_BYTE = new Uint8Array([EntryType.GLOBAL_LOG])

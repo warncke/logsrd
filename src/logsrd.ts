@@ -1,8 +1,10 @@
 import uWS, { HttpResponse } from "uWebSockets.js"
 
+import CommandLogEntry from "./lib/entry/command-log-entry"
 import GlobalLogEntryFactory from "./lib/entry/global-log-entry-factory"
 import { GLOBAL_LOG_PREFIX_BYTE_LENGTH, MAX_ENTRY_SIZE } from "./lib/globals"
-import LogId from "./lib/log-id"
+import { ProtectedProperties } from "./lib/log/log-config"
+import LogId from "./lib/log/log-id"
 import Server from "./lib/server"
 
 const dataDir = process.env.DATA_DIR || "./data"
@@ -141,6 +143,22 @@ async function run(): Promise<void> {
     })
 }
 
+function getToken(req: uWS.HttpRequest): string | null {
+    const authorization = req.getHeader("authorization")
+    if (!authorization.startsWith("Bearer ")) {
+        return null
+    }
+    return authorization.slice(7)
+}
+
+function filterProtectedProperties(obj: any) {
+    return Object.fromEntries(
+        Object.entries(obj).filter(([key]) => {
+            return !ProtectedProperties.includes(key)
+        }),
+    )
+}
+
 function readPost(res: HttpResponse, cb: (data: Uint8Array) => void) {
     let buffer: Buffer
     /* Register data cb */
@@ -224,7 +242,7 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
             return
         }
         try {
-            config = await server.createLog(config)
+            const entry = await server.createLog(config)
 
             if (res.aborted) return
 
@@ -235,7 +253,7 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
                 })
             } else {
                 res.cork(() => {
-                    res.end(JSON.stringify(config))
+                    res.end(entry.entry.u8())
                 })
             }
         } catch (err: any) {
@@ -255,6 +273,7 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
 
 async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
     const logIdBase64 = req.getParameter(0)
+    const token = getToken(req)
 
     res.onAborted(() => {
         res.aborted = true
@@ -285,7 +304,7 @@ async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
         try {
             const logId = LogId.newFromBase64(logIdBase64)
 
-            const entry = await server.appendLog(logId, data)
+            const entry = await server.appendLog(logId, token, data)
 
             if (res.aborted) return
 
@@ -295,10 +314,17 @@ async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
         } catch (err: any) {
             if (res.aborted) return
 
-            res.cork(() => {
-                res.writeStatus("400")
-                res.end(JSON.stringify({ error: err.message, stack: err.stack }))
-            })
+            if (err.message === "Access denied") {
+                res.cork(() => {
+                    res.writeStatus("403")
+                    res.end(JSON.stringify({ error: err.message }))
+                })
+            } else {
+                res.cork(() => {
+                    res.writeStatus("400")
+                    res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                })
+            }
         }
     })
 }
@@ -307,6 +333,7 @@ async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
     let contentType = req.getHeader("content-type")
     const expectJSON = contentType.startsWith("application/json")
     const logIdBase64 = req.getParameter(0)
+    const token = getToken(req)
 
     res.onAborted(() => {
         res.aborted = true
@@ -325,20 +352,13 @@ async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
     try {
         const logId = LogId.newFromBase64(logIdBase64)
 
-        const config = await server.getConfig(logId)
+        const { allowed, entry } = await server.getConfig(logId, token)
 
         if (res.aborted) return
 
-        if (config === null) {
-            res.cork(() => {
-                res.writeStatus("404")
-                expectJSON ? res.end(JSON.stringify({ error: LOG_NOT_FOUND_ERROR })) : res.end(LOG_NOT_FOUND_ERROR)
-            })
-        } else {
-            res.cork(() => {
-                res.end(JSON.stringify(config))
-            })
-        }
+        res.cork(() => {
+            res.end(entry.entry.u8())
+        })
     } catch (err: any) {
         if (res.aborted) return
 
@@ -355,6 +375,7 @@ async function getHead(server: Server, res: uWS.HttpResponse, req: uWS.HttpReque
     let contentType = req.getHeader("content-type")
     const expectJSON = contentType.startsWith("application/json")
     const logIdBase64 = req.getParameter(0)
+    const token = getToken(req)
 
     res.onAborted(() => {
         res.aborted = true
@@ -373,12 +394,24 @@ async function getHead(server: Server, res: uWS.HttpResponse, req: uWS.HttpReque
     try {
         const logId = LogId.newFromBase64(logIdBase64)
 
-        const entry = await server.getHead(logId)
+        const { allowed, entry } = await server.getHead(logId, token)
 
         if (res.aborted) return
 
         res.cork(() => {
-            res.end(entry.u8())
+            if (entry.entry instanceof CommandLogEntry) {
+                if (allowed.admin) {
+                    res.end(JSON.stringify(filterProtectedProperties(entry.entry.value())))
+                } else {
+                    res.end("{}")
+                }
+            } else {
+                if (allowed.read) {
+                    res.end(entry.u8())
+                } else {
+                    res.end("{}")
+                }
+            }
         })
     } catch (err: any) {
         if (res.aborted) return
@@ -396,6 +429,7 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
     let contentType = req.getHeader("content-type")
     const expectJSON = contentType.startsWith("application/json")
     const logIdBase64 = req.getParameter(0)
+    const token = getToken(req)
     const offset = req.getQuery("offset")
     const limit = req.getQuery("limit")
     const entryNums = req.getQuery("entryNums")
@@ -417,9 +451,10 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
 
     try {
         const logId = LogId.newFromBase64(logIdBase64)
+        const log = server.getLog(logId)
         // TODO: this should be streaming instead of buffering everything
-        const config = await server.getConfig(logId)
-        const entries = await server.getEntries(logId, entryNums, offset, limit)
+        const config = await log.getConfig()
+        const { allowed, entries } = await server.getEntries(logId, token, entryNums, offset, limit)
 
         if (res.aborted) return
 
@@ -430,11 +465,37 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
                 for (let i = 0; i < entries.length; i++) {
                     const entry = entries[i]
                     if (meta) {
-                        res.write(`{"entryNum":${entry.entryNum},"crc":${entry.cksumNum},"entry":`)
-                        res.write(entry.u8())
-                        res.write("}")
+                        if (entry.entry instanceof CommandLogEntry) {
+                            if (allowed.admin) {
+                                res.write(`{"entryNum":${entry.entryNum},"crc":${entry.cksumNum},"entry":`)
+                                res.write(JSON.stringify(filterProtectedProperties(entry.entry.value())))
+                                res.write("}")
+                            } else {
+                                res.write(`{"entryNum":${entry.entryNum},"entry":{}}`)
+                            }
+                        } else {
+                            if (allowed.read) {
+                                res.write(`{"entryNum":${entry.entryNum},"crc":${entry.cksumNum},"entry":`)
+                                res.write(entry.u8())
+                                res.write("}")
+                            } else {
+                                res.write(`{"entryNum":${entry.entryNum},"entry":{}}`)
+                            }
+                        }
                     } else {
-                        res.write(entry.u8())
+                        if (entry.entry instanceof CommandLogEntry) {
+                            if (allowed.admin) {
+                                res.write(JSON.stringify(filterProtectedProperties(entry.entry.value())))
+                            } else {
+                                res.write("{}")
+                            }
+                        } else {
+                            if (allowed.read) {
+                                res.write(entry.u8())
+                            } else {
+                                res.write("{}")
+                            }
+                        }
                     }
                     if (i < entries.length - 1) {
                         res.write(",")

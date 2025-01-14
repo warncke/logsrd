@@ -1,7 +1,7 @@
 import GlobalLogEntry from "../entry/global-log-entry"
 import Log from "../log"
-import LogConfig from "../log-config"
 import WriteIOOperation from "../persist/io/write-io-operation"
+import LogConfig from "./log-config"
 
 type AppendQueueEntry = {
     entry: GlobalLogEntry
@@ -76,10 +76,10 @@ export default class AppendQueue {
             }
             // persist
             await Promise.all(
-                this.entries.map((entry) => {
+                this.entries.map(async (entry) => {
                     this.log.server.persist.newHotLog.enqueueOp(entry.op)
-                    entry.op.promise.then((op) => this.log.stats.addOp(op))
-                    return entry.op.promise
+                    entry.op = await entry.op.promise
+                    this.log.stats.addOp(entry.op)
                 }),
             )
             // resolve promise - everything calling waitHead or waitConfig will now resolve with correct entry

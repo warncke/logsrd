@@ -1,5 +1,5 @@
 import { ReadIOOperation } from "../../globals"
-import LogId from "../../log-id"
+import LogId from "../../log/log-id"
 import IOOperation from "./io-operation"
 import IOQueue from "./io-queue"
 import WriteIOOperation from "./write-io-operation"

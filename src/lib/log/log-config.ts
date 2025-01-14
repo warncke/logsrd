@@ -13,10 +13,21 @@ export interface ILogConfig {
     adminToken?: string
     readToken?: string
     writeToken?: string
+    superToken?: string
     jwtProperties?: string[]
     jwtSecret?: string
     stopped: boolean
 }
+
+export const ProtectedProperties = [
+    "accessToken",
+    "adminToken",
+    "readToken",
+    "writeToken",
+    "superToken",
+    "jwtProperties",
+    "jwtSecret",
+]
 
 export const LogConfigSchema: JSONSchemaType<ILogConfig> = {
     type: "object",
@@ -74,6 +85,10 @@ export const LogConfigSchema: JSONSchemaType<ILogConfig> = {
             type: "string",
             nullable: true,
         },
+        superToken: {
+            type: "string",
+            nullable: true,
+        },
         jwtProperties: {
             type: "array",
             items: {
@@ -123,6 +138,7 @@ export default class LogConfig implements ILogConfig {
     adminToken?: string
     readToken?: string
     writeToken?: string
+    superToken?: string
     jwtProperties?: string[]
     jwtSecret?: string
     // @ts-ignore
@@ -147,12 +163,21 @@ export default class LogConfig implements ILogConfig {
             if (this.accessToken || this.adminToken || this.readToken || this.writeToken) {
                 throw new Error("accessTokens should not be provided when authType is jwt")
             }
-            // unless all of the jwt varients are specified need a base jwtSecret
+            // set random jwtSecret if none provided
             if (!this.jwtSecret) {
                 this.jwtSecret = Buffer.from(await crypto.randomBytes(32)).toString("base64")
             }
         } else {
             throw new Error("Invalid authType")
+        }
+        if (this.access === "public" && (this.readToken || this.writeToken)) {
+            throw new Error("readToken and writeToken cannot be set when access is public")
+        }
+        if (this.access === "readOnly" && this.readToken) {
+            throw new Error("readToken cannot be set when access is readOnly")
+        }
+        if (this.access === "writeOnly" && this.writeToken) {
+            throw new Error("writeToken cannot be set when access is writeOnly")
         }
     }
 

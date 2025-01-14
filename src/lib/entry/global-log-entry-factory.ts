@@ -1,5 +1,5 @@
 import { EntryType, GLOBAL_LOG_PREFIX_BYTE_LENGTH, MAX_ENTRY_SIZE } from "../globals"
-import LogId from "../log-id"
+import LogId from "../log/log-id"
 import GlobalLogEntry from "./global-log-entry"
 import LogEntry from "./log-entry"
 import LogEntryFactory from "./log-entry-factory"
