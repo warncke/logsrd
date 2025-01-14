@@ -16,6 +16,7 @@
     "chai": "5.1.2",
     "chai-as-promised": "8.0.1",
     "commander": "12.1.0",
+    "jose": "5.9.6",
     "mocha": "11.0.1",
     "mz": "2.7.0",
     "undici": "7.2.0",

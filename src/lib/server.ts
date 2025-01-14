@@ -150,6 +150,12 @@ export default class Server {
         const log = this.getLog(logId)
         const config = await log.getConfig()
         const allowed = await log.access.allowed(token)
+        // entries may be either a command which requires admin or an entry which requires read
+        // if client has access to one but not the other then entries they do not have access to
+        // will be returned as empty objects
+        if (!allowed.read && !allowed.admin) {
+            throw new Error("Access denied")
+        }
 
         if (typeof entryNums === "string" && entryNums.length > 0) {
             entryNums = entryNums

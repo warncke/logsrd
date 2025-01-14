@@ -1,3 +1,5 @@
+import * as jose from "jose"
+
 import Log from "../log"
 
 export type AccessAllowed = {
@@ -21,6 +23,14 @@ export default class Access {
     async allowed(token: string | null): Promise<AccessAllowed> {
         const config = await this.log.getConfig()
         if (config.authType === "token") {
+            // if there was no token then only allow public access
+            if (token === null || token.length === 0) {
+                return this.accessAllowed(
+                    false,
+                    config.access === "public" || config.access === "readOnly",
+                    config.access === "public" || config.access === "writeOnly",
+                )
+            }
             // superToken gives access to everything
             if (config.superToken && config.superToken === token) {
                 return this.accessAllowed(true, true, true)
@@ -60,9 +70,16 @@ export default class Access {
         } else if (config.authType === "jwt") {
             if (token === null) {
                 return this.accessAllowed(false, false, false)
-            } else {
-                return this.accessAllowed(true, true, true)
             }
+            const { payload } = await jose.jwtVerify(token, this.jwtSecretU8(), { algorithms: ["HS256"] })
+            if (typeof payload.allow !== "string") {
+                throw new Error("Invalid JWT: allow required")
+            }
+            return this.accessAllowed(
+                payload.allow.includes("admin"),
+                payload.allow.includes("read"),
+                payload.allow.includes("write"),
+            )
         } else {
             throw new Error("Invalid config: invalid authType")
         }
