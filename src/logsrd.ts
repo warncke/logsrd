@@ -357,7 +357,7 @@ async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
         if (res.aborted) return
 
         res.cork(() => {
-            res.end(entry.entry.u8())
+            res.end(JSON.stringify(filterProtectedProperties((entry.entry as CommandLogEntry).value())))
         })
     } catch (err: any) {
         if (res.aborted) return
