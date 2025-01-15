@@ -63,7 +63,7 @@ export default class Log {
     async append(entry: LogEntry, config: LogConfig | null = null): Promise<GlobalLogEntry> {
         entry = new GlobalLogEntry({
             entry,
-            entryNum: this.nextEntryNum(),
+            entryNum: this.lastEntryNum() + 1,
             logId: this.logId,
         })
         const appendQueue = this.appendQueue
@@ -423,28 +423,22 @@ export default class Log {
             .flat()
     }
 
-    maxEntryNum(): number {
+    lastEntryNum(): number {
+        let maxEntryNum = -1
         if (this.newHotLogIndex !== null && this.newHotLogIndex.hasEntries()) {
-            return this.newHotLogIndex.maxEntryNum()
+            maxEntryNum = this.newHotLogIndex.maxEntryNum()
         } else if (this.oldHotLogIndex !== null && this.oldHotLogIndex.hasEntries()) {
-            return this.oldHotLogIndex.maxEntryNum()
+            maxEntryNum = this.oldHotLogIndex.maxEntryNum()
         } else if (this.logLogIndex !== null && this.logLogIndex.hasEntries()) {
-            return this.logLogIndex.maxEntryNum()
-        } else {
-            // if there are no entries return -1 so this will be incremented to zero for the first entry
-            return -1
+            maxEntryNum = this.logLogIndex.maxEntryNum()
         }
-    }
-
-    nextEntryNum(): number {
-        let maxEntryNum = this.maxEntryNum()
         if (this.appendInProgress !== null) {
             maxEntryNum += this.appendInProgress.entries.length
         }
         if (this.appendQueue !== null) {
             maxEntryNum += this.appendQueue.entries.length
         }
-        return maxEntryNum + 1
+        return maxEntryNum
     }
 
     addNewHotLogEntry(entry: LogEntry, entryNum: number, entryOffset: number, length: number) {

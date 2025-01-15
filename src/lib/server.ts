@@ -59,12 +59,21 @@ export default class Server {
         await this.persist.init()
     }
 
-    async appendLog(logId: LogId, token: string | null, data: Uint8Array): Promise<GlobalLogEntry> {
+    async appendLog(
+        logId: LogId,
+        token: string | null,
+        data: Uint8Array,
+        lastEntryNum: number | null,
+    ): Promise<GlobalLogEntry> {
         const log = this.getLog(logId)
         const config = await log.getConfig()
 
         if (!(await log.access.allowWrite(token))) {
             throw new Error("Access denied")
+        }
+
+        if (lastEntryNum !== null && lastEntryNum !== log.lastEntryNum()) {
+            throw new Error("lastEntryNum mismatch")
         }
 
         let entry
@@ -76,7 +85,7 @@ export default class Server {
             throw new Error(`unknown log type ${config.type}`)
         }
 
-        entry = await this.getLog(logId).append(entry)
+        entry = await log.append(entry)
         // cksum was not performed - unknown error
         if (entry.cksumNum === 0) {
             throw new Error("cksum error")

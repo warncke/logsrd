@@ -29,6 +29,7 @@ const SERVER_ERROR = "Server error"
 const MAX_POST_SIZE_ERROR = `Max post size ${MAX_ENTRY_SIZE} bytes exceeded`
 const INVALID_ENTRY_TYPE_ERROR = "Invalid entry type"
 const INVALID_LOG_TYPE_ERROR = "Invalid log type"
+const INVALID_LAST_ENTRY_NUM_ERROR = "Invalid lastEntryNum"
 
 const NO_ENTRIES_INFO = "No entries"
 
@@ -200,21 +201,9 @@ function readPost(res: HttpResponse, cb: (data: Uint8Array) => void) {
 }
 
 async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
-    const contentType = req.getHeader("content-type")
-
     res.onAborted(() => {
         res.aborted = true
     })
-
-    if (!contentType.startsWith("application/json")) {
-        if (res.aborted) return
-
-        res.cork(() => {
-            res.writeStatus("400")
-            res.end(JSON_REQUIRED_ERROR)
-        })
-        return
-    }
 
     /* Read the body until done or error */
     readPost(res, async (data: Uint8Array) => {
@@ -274,6 +263,19 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
 async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
     const logIdBase64 = req.getParameter(0)
     const token = getToken(req)
+    const lastEntryNumParam = req.getQuery("lastEntryNum")
+    let lastEntryNum: number | null = null
+
+    if (lastEntryNumParam && lastEntryNumParam.length > 0) {
+        if (parseInt(lastEntryNumParam).toString() === lastEntryNumParam) {
+            lastEntryNum = parseInt(lastEntryNumParam)
+        } else {
+            res.cork(() => {
+                res.writeStatus("400")
+                res.end(JSON.stringify({ error: INVALID_LAST_ENTRY_NUM_ERROR }))
+            })
+        }
+    }
 
     res.onAborted(() => {
         res.aborted = true
@@ -304,7 +306,7 @@ async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
         try {
             const logId = LogId.newFromBase64(logIdBase64)
 
-            const entry = await server.appendLog(logId, token, data)
+            const entry = await server.appendLog(logId, token, data, lastEntryNum)
 
             if (res.aborted) return
 
@@ -313,10 +315,15 @@ async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
             })
         } catch (err: any) {
             if (res.aborted) return
-
+            // TODO: do something about this shitty error handling
             if (err.message === "Access denied") {
                 res.cork(() => {
                     res.writeStatus("403")
+                    res.end(JSON.stringify({ error: err.message }))
+                })
+            } else if (lastEntryNum !== null && err.message === "lastEntryNum mismatch") {
+                res.cork(() => {
+                    res.writeStatus("409")
                     res.end(JSON.stringify({ error: err.message }))
                 })
             } else {

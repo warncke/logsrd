@@ -91,7 +91,10 @@ async function testIteration() {
         try {
             const { statusCode, body } = await request(`http://127.0.0.1:7000/log/${config.logId}`, {
                 method: "POST",
-                headers: { "content-type": "application/json" },
+                headers: {
+                    authorization: `Bearer ${config.accessToken}`,
+                    "content-type": "application/json",
+                },
                 body: `{"entryNum":${entryNum}}`,
                 dispatcher,
             })
@@ -110,7 +113,14 @@ async function testIteration() {
         try {
             const headRequests = Array(10)
                 .fill(null)
-                .map(() => request(`http://127.0.0.1:7000/log/${config.logId}/head`, { dispatcher }))
+                .map(() =>
+                    request(`http://127.0.0.1:7000/log/${config.logId}/head`, {
+                        headers: {
+                            authorization: `Bearer ${config.accessToken}`,
+                        },
+                        dispatcher,
+                    }),
+                )
             const headResponses = await Promise.all(headRequests)
 
             for (const response of headResponses) {
@@ -138,7 +148,12 @@ async function testIteration() {
         try {
             const { statusCode, body } = await request(
                 `http://127.0.0.1:7000/log/${config.logId}/entries?offset=${offset}`,
-                { dispatcher },
+                {
+                    headers: {
+                        authorization: `Bearer ${config.accessToken}`,
+                    },
+                    dispatcher,
+                },
             )
             stats.entriesRequests++
 
