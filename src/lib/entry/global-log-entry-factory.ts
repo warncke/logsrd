@@ -68,7 +68,14 @@ export default class GlobalLogEntryFactory {
         crc: number
         entry: LogEntry
     } {
+        if (u8.length < GLOBAL_LOG_PREFIX_BYTE_LENGTH) {
+            throw new Error(`Invalid u8 length: ${u8.length}`)
+        }
         const entryLength = GlobalLogEntryFactory.entryLengthFromU8(u8)
+        const totalLength = entryLength + GLOBAL_LOG_PREFIX_BYTE_LENGTH
+        if (u8.length < totalLength) {
+            throw new Error(`Invalid u8 length: ${u8.length} expected: ${totalLength}`)
+        }
         // TODO: copying the buffer here should not really be necessary but without it a mysterious error
         // occurs in LogId.logDirPrefix encoding the logId to hex which may indicate some other bug somewhere
         // else but this fixes it and everything else works so doing this for now
