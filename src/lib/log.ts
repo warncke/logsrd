@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import path from "path"
 
+import CommandLogEntry from "./entry/command-log-entry"
 import JSONCommandType from "./entry/command/command-type/json-command-type"
 import CreateLogCommand from "./entry/command/create-log-command"
 import GlobalLogEntry from "./entry/global-log-entry"
@@ -250,6 +251,27 @@ export default class Log {
             throw new Error("Invalid entry type for config")
         }
         return this.config
+    }
+
+    async setConfig(setConfig: any, lastConfigNum: number): Promise<GlobalLogEntry> {
+        // only allow one setConfig at a time
+        if (
+            (this.appendInProgress !== null && this.appendInProgress.hasConfig()) ||
+            (this.appendQueue !== null && this.appendQueue.hasConfig())
+        ) {
+            throw new Error("setConfig in progress")
+        }
+
+        const configEntry = await this.getConfigEntry()
+        if (configEntry.entryNum !== lastConfigNum) {
+            throw new Error("lastConfigNum mismatch")
+        }
+
+        const newConfig = Object.assign((configEntry.entry as JSONCommandType).value(), setConfig)
+        const config = await LogConfig.newFromJSON(newConfig)
+        const entry = await this.append(new CreateLogCommand({ value: config }), config)
+        this.config = config
+        return entry
     }
 
     async getConfigEntry(): Promise<GlobalLogEntry | LogLogEntry> {

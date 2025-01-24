@@ -148,6 +148,10 @@ export default class LogConfig implements ILogConfig {
         Object.assign(this, config)
     }
 
+    replicationGroup(): string[] {
+        return [this.master, ...(this.replicas || [])]
+    }
+
     async setDefaults() {
         if (this.authType === "token") {
             if (this.jwtSecret) {

@@ -71,7 +71,12 @@ export default class Server {
         if (!(await log.access.allowWrite(token))) {
             throw new Error("Access denied")
         }
-
+        if (config.stopped) {
+            throw new Error("Log is stopped")
+        }
+        if (config.master !== this.config.host) {
+            throw new Error(`Must append to master: ${config.master}`)
+        }
         if (lastEntryNum !== null && lastEntryNum !== log.lastEntryNum()) {
             throw new Error("lastEntryNum mismatch")
         }
@@ -149,6 +154,36 @@ export default class Server {
         return { allowed, entry }
     }
 
+    async setConfig(
+        logId: LogId,
+        token: string | null,
+        setConfig: any,
+        lastConfigNum: number,
+    ): Promise<GlobalLogEntry | LogLogEntry> {
+        const log = this.getLog(logId)
+        const config = await log.getConfig()
+
+        if (!(await log.access.allowAdmin(token))) {
+            throw new Error("Access denied")
+        }
+        if (setConfig.stopped === true) {
+            if (Object.keys(setConfig).length !== 1) {
+                throw new Error("Cannot change config when stopping log")
+            }
+            const replicationGroup = config.replicationGroup()
+            if (!replicationGroup.includes(this.config.host)) {
+                throw new Error(`Must setConfig on master or replica: ${replicationGroup.join(", ")}`)
+            }
+        } else {
+            if (config.master !== this.config.host) {
+                throw new Error(`Must setConfig on master: ${config.master}`)
+            }
+        }
+
+        const entry = await log.setConfig(setConfig, lastConfigNum)
+        return entry
+    }
+
     async getEntries(
         logId: LogId,
         token: string | null,
@@ -162,8 +197,11 @@ export default class Server {
         // entries may be either a command which requires admin or an entry which requires read
         // if client has access to one but not the other then entries they do not have access to
         // will be returned as empty objects
-        if (!allowed.read && !allowed.admin) {
+        if (!(allowed.read || allowed.admin)) {
             throw new Error("Access denied")
+        }
+        if (config.master !== this.config.host) {
+            throw new Error(`Must read from master: ${config.master}`)
         }
 
         if (typeof entryNums === "string" && entryNums.length > 0) {
@@ -219,6 +257,9 @@ export default class Server {
         // head may be either a command which requires admin or an entry which requires read
         if (!allowed.read && !allowed.admin) {
             throw new Error("Access denied")
+        }
+        if (config.master !== this.config.host) {
+            throw new Error(`Must read from master: ${config.master}`)
         }
         const entry = await log.getHead()
         return { allowed, entry }

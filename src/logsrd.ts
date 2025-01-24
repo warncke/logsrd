@@ -30,6 +30,7 @@ const MAX_POST_SIZE_ERROR = `Max post size ${MAX_ENTRY_SIZE} bytes exceeded`
 const INVALID_ENTRY_TYPE_ERROR = "Invalid entry type"
 const INVALID_LOG_TYPE_ERROR = "Invalid log type"
 const INVALID_LAST_ENTRY_NUM_ERROR = "Invalid lastEntryNum"
+const INVALID_LAST_CONFIG_NUM_ERROR = "Invalid lastConfigNum"
 
 const NO_ENTRIES_INFO = "No entries"
 
@@ -56,6 +57,7 @@ async function run(): Promise<void> {
     logsrd.post("/log", (res, req) => createLog(server, res, req))
     logsrd.post("/log/:logid", (res, req) => appendLog(server, res, req))
     logsrd.get("/log/:logid/config", (res, req) => getConfig(server, res, req))
+    logsrd.patch("/log/:logid/config", (res, req) => setConfig(server, res, req))
     logsrd.get("/log/:logid/head", (res, req) => getHead(server, res, req))
     logsrd.get("/log/:logid/entries", (res, req) => getEntries(server, res, req))
 
@@ -234,17 +236,9 @@ async function createLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
             const entry = await server.createLog(config)
 
             if (res.aborted) return
-
-            if (config === null) {
-                res.cork(() => {
-                    res.writeStatus("400")
-                    res.end(JSON.stringify({ error: LOG_CREATE_ERROR }))
-                })
-            } else {
-                res.cork(() => {
-                    res.end(entry.entry.u8())
-                })
-            }
+            res.cork(() => {
+                res.end(entry.entry.u8())
+            })
         } catch (err: any) {
             if (res.aborted) return
 
@@ -266,20 +260,22 @@ async function appendLog(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
     const lastEntryNumParam = req.getQuery("lastEntryNum")
     let lastEntryNum: number | null = null
 
+    res.onAborted(() => {
+        res.aborted = true
+    })
+
     if (lastEntryNumParam && lastEntryNumParam.length > 0) {
         if (parseInt(lastEntryNumParam).toString() === lastEntryNumParam) {
             lastEntryNum = parseInt(lastEntryNumParam)
         } else {
+            if (res.aborted) return
+
             res.cork(() => {
                 res.writeStatus("400")
                 res.end(JSON.stringify({ error: INVALID_LAST_ENTRY_NUM_ERROR }))
             })
         }
     }
-
-    res.onAborted(() => {
-        res.aborted = true
-    })
 
     if (!logIdBase64 || logIdBase64.length !== 22) {
         if (res.aborted) return
@@ -376,6 +372,88 @@ async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
                 : res.end(`${err.message} ${err.stack}`)
         })
     }
+}
+
+async function setConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {
+    const logIdBase64 = req.getParameter(0)
+    const token = getToken(req)
+    const lastConfigNum = parseInt(req.getQuery("lastConfigNum")!)
+
+    res.onAborted(() => {
+        res.aborted = true
+    })
+
+    if (!(lastConfigNum >= 0)) {
+        if (res.aborted) return
+        res.cork(() => {
+            res.writeStatus("400")
+            res.end(JSON.stringify({ error: INVALID_LAST_CONFIG_NUM_ERROR }))
+        })
+    }
+
+    if (!logIdBase64 || logIdBase64.length !== 22) {
+        if (res.aborted) return
+        res.cork(() => {
+            res.writeStatus("404")
+            res.end(JSON.stringify({ error: INVALID_LOG_ID_ERROR }))
+        })
+        return
+    }
+
+    /* Read the body until done or error */
+    readPost(res, async (data: Uint8Array) => {
+        if (data.length > MAX_ENTRY_SIZE) {
+            if (res.aborted) return
+            res.cork(() => {
+                res.writeStatus("400")
+                res.end(MAX_POST_SIZE_ERROR)
+            })
+            return
+        }
+
+        let config: any
+        try {
+            config = JSON.parse(new TextDecoder().decode(data))
+        } catch (err: any) {
+            if (res.aborted) return
+            res.cork(() => {
+                res.writeStatus("400")
+                res.end(INVALID_JSON_POST_ERROR)
+            })
+            return
+        }
+
+        try {
+            const logId = LogId.newFromBase64(logIdBase64)
+
+            const entry = await server.setConfig(logId, token, config, lastConfigNum)
+
+            if (res.aborted) return
+
+            res.cork(() => {
+                res.end(JSON.stringify(filterProtectedProperties((entry.entry as CommandLogEntry).value())))
+            })
+        } catch (err: any) {
+            if (res.aborted) return
+            // TODO: do something about this shitty error handling
+            if (err.message === "Access denied") {
+                res.cork(() => {
+                    res.writeStatus("403")
+                    res.end(JSON.stringify({ error: err.message }))
+                })
+            } else if (err.message === "lastConfigNum mismatch") {
+                res.cork(() => {
+                    res.writeStatus("409")
+                    res.end(JSON.stringify({ error: err.message }))
+                })
+            } else {
+                res.cork(() => {
+                    res.writeStatus("400")
+                    res.end(JSON.stringify({ error: err.message, stack: err.stack }))
+                })
+            }
+        }
+    })
 }
 
 async function getHead(server: Server, res: uWS.HttpResponse, req: uWS.HttpRequest) {

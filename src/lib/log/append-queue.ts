@@ -49,39 +49,28 @@ export default class AppendQueue {
         this.log.appendInProgress = this
         this.log.appendQueue = new AppendQueue(this.log)
         try {
-            // do replication if any replicas
-            const replicatePromises = []
+            let replicas
+            // start with log config replicas if config exists
+            if (this.log.config !== null) {
+                replicas = this.log.config.replicas
+            }
             for (const entry of this.entries) {
-                let lastConfig: LogConfig | null = null
-                let replicas
+                // entry in queue may change config so switch to replicas from that
+                // config for that and any subsequent entries
                 if (entry.config !== null) {
                     replicas = entry.config.replicas
-                    lastConfig = entry.config
-                } else if (lastConfig !== null) {
-                    // TODO
-                    // replicas = (lastConfig as GlobalLogEntry).entry.value().replicas
-                } else if (this.log.config !== null) {
-                    replicas = this.log.config.replicas
-                } else {
-                    throw new Error("No config")
                 }
+                // replicate
                 if (replicas && replicas.length > 0) {
-                    for (const host of replicas) {
-                        replicatePromises.push(this.log.server.replicate.appendReplica(host, entry.entry))
-                    }
+                    await Promise.all(
+                        replicas.map((host) => this.log.server.replicate.appendReplica(host, entry.entry)),
+                    )
                 }
+                // persist
+                this.log.server.persist.newHotLog.enqueueOp(entry.op)
+                entry.op = await entry.op.promise
+                this.log.stats.addOp(entry.op)
             }
-            if (replicatePromises.length > 0) {
-                await Promise.all(replicatePromises)
-            }
-            // persist
-            await Promise.all(
-                this.entries.map(async (entry) => {
-                    this.log.server.persist.newHotLog.enqueueOp(entry.op)
-                    entry.op = await entry.op.promise
-                    this.log.stats.addOp(entry.op)
-                }),
-            )
             // resolve promise - everything calling waitHead or waitConfig will now resolve with correct entry
             this.complete()
             // clear this queue now that it is complete
