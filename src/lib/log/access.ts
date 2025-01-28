@@ -21,10 +21,6 @@ export default class Access {
     }
 
     async allowed(token: string | null): Promise<AccessAllowed> {
-        // if request is from an internal service then allow admin access
-        if (token === this.log.server.config.secret) {
-            return this.accessAllowed(true, false, false)
-        }
         const config = await this.log.getConfig()
         if (config.authType === "token") {
             // if there was no token then only allow public access

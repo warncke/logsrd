@@ -17,6 +17,7 @@ export interface ILogConfig {
     jwtProperties?: string[]
     jwtSecret?: string
     stopped: boolean
+    configLog?: string
 }
 
 export const ProtectedProperties = [
@@ -104,6 +105,10 @@ export const LogConfigSchema: JSONSchemaType<ILogConfig> = {
             type: "boolean",
             default: false,
         },
+        configLog: {
+            type: "string",
+            nullable: true,
+        },
     },
     required: ["access", "authType", "logId", "master", "type", "stopped"],
     additionalProperties: false,
@@ -143,6 +148,7 @@ export default class LogConfig implements ILogConfig {
     jwtSecret?: string
     // @ts-ignore
     stopped: boolean
+    configLog?: string
 
     constructor(config: ILogConfig) {
         Object.assign(this, config)
