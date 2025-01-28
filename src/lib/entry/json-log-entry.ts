@@ -47,6 +47,17 @@ export default class JSONLogEntry extends LogEntry {
         return [TYPE_BYTE, this.u8()]
     }
 
+    str(): string {
+        if (this.#jsonStr !== null) {
+            return this.#jsonStr
+        } else if (this.#jsonU8 !== null) {
+            this.#jsonStr = new TextDecoder().decode(this.#jsonU8)
+            return this.#jsonStr
+        } else {
+            throw new Error("No json")
+        }
+    }
+
     static fromU8(u8: Uint8Array): JSONLogEntry {
         const entryType: number | undefined = u8.at(0)
         if (entryType !== EntryType.JSON) {

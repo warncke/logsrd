@@ -1,4 +1,5 @@
 import path from "node:path"
+import { TemplatedApp } from "uWebSockets.js"
 
 import BinaryLogEntry from "./entry/binary-log-entry"
 import CreateLogCommand from "./entry/command/create-log-command"
@@ -12,6 +13,7 @@ import LogConfig from "./log/log-config"
 import LogId from "./log/log-id"
 import Persist from "./persist"
 import Replicate from "./replicate"
+import Subscribe from "./subscribe"
 
 export type ServerConfig = {
     host: string
@@ -33,15 +35,19 @@ export default class Server {
     config: ServerConfig
     persist: Persist
     replicate: Replicate
+    subscribe: Subscribe
+    uws: TemplatedApp
     logs: Map<string, Log> = new Map()
 
-    constructor(config: ServerConfig) {
+    constructor(config: ServerConfig, uws: TemplatedApp) {
         config.hotLogFileName = config.hotLogFileName || DEFAULT_HOT_LOG_FILE_NAME
         config.blobDir = config.blobDir || path.join(config.dataDir, "blobs")
         config.logDir = config.logDir || path.join(config.dataDir, "logs")
         this.config = config
+        this.uws = uws
         this.persist = new Persist(this)
         this.replicate = new Replicate(this)
+        this.subscribe = new Subscribe(this)
     }
 
     delLog(logId: LogId) {

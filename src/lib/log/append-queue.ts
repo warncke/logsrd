@@ -44,6 +44,10 @@ export default class AppendQueue {
         // set this queue to in progress and create new queue for subsequent appends
         this.log.appendInProgress = this
         this.log.appendQueue = new AppendQueue(this.log)
+        // TODO: logic here is wrong because entries are replicated/persisted one-by-one, not as
+        // a block (this changed), so needs to be rewritten to return success on those that completed
+        // and fail on the ones that did not. open question as to whether or not stopping after failure
+        // is correct
         try {
             let config = this.log.config
 
@@ -72,6 +76,8 @@ export default class AppendQueue {
                 this.log.server.persist.newHotLog.enqueueOp(entry.op)
                 entry.op = await entry.op.promise
                 this.log.stats.addOp(entry.op)
+                // publish to subscribers
+                this.log.server.subscribe.publish(entry.entry)
             }
             // resolve promise - everything calling waitHead or waitConfig will now resolve with correct entry
             this.complete()

@@ -47,10 +47,11 @@ async function run(): Promise<void> {
         replicateTimeout,
         secret,
     }
-    const server = new Server(config)
-    await server.init()
 
     const logsrd = uWS.App()
+
+    const server = new Server(config, logsrd)
+    await server.init()
 
     /* Public Routes */
 
@@ -111,6 +112,75 @@ async function run(): Promise<void> {
         },
         close: (ws, code, message) => {
             // nothing to do here yet
+        },
+    })
+
+    /* client WebSocket */
+    logsrd.ws(`/client`, {
+        compression: 0,
+        idleTimeout: 60,
+        maxLifetime: 0,
+        maxPayloadLength: MAX_ENTRY_SIZE + GLOBAL_LOG_PREFIX_BYTE_LENGTH,
+
+        upgrade: (res, req, context) => {
+            // TODO: add client auth
+            res.upgrade(
+                {},
+                req.getHeader("sec-websocket-key"),
+                req.getHeader("sec-websocket-protocol"),
+                req.getHeader("sec-websocket-extensions"),
+                context,
+            )
+        },
+        open: (ws) => {
+            // nothing to do here yet
+        },
+        message: async (ws, message, isBinary) => {
+            // TOOD: binary messages should be used but need to refactor log entry
+            // before digging that hole deeper
+            if (isBinary) {
+                ws.send("err:not implemented")
+            } else {
+                const [command, logIdBase64, token] = new TextDecoder().decode(message).split(":")
+                if (logIdBase64.length !== 22) {
+                    ws.send(`{command}:err:invalid log id`)
+                    return
+                }
+                const logId = LogId.newFromBase64(logIdBase64)
+                switch (command) {
+                    case "sub":
+                        try {
+                            if ((await server.subscribe.allowSubscription(logId, token)) && ws.subscribe(logIdBase64)) {
+                                ws.send(`sub:${logIdBase64}:ok`)
+                            } else {
+                                ws.send(`sub:${logIdBase64}:err:access denied`)
+                            }
+                        } catch (err: any) {
+                            ws.send(`sub:${logIdBase64}:err:${err.message}`)
+                        }
+                        return
+                    case "unsub":
+                        ws.unsubscribe(logIdBase64)
+                        ws.send(`unsub:${logIdBase64}:ok`)
+                        return
+                    default:
+                        ws.send("err:not implemented")
+                }
+            }
+        },
+        drain: (ws) => {
+            // unsafely ignore this for now
+        },
+        close: (ws, code, message) => {
+            // nothing to do here yet
+        },
+        subscription: (ws, topic, newCount, oldCount) => {
+            const logId = new TextDecoder().decode(topic)
+            if (newCount > 0) {
+                server.subscribe.addSubscription(logId)
+            } else {
+                server.subscribe.delSubscription(logId)
+            }
         },
     })
 

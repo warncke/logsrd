@@ -59,13 +59,13 @@ export default class Host {
                 this.lastError = null
                 this.sendAll()
             })
-            this.ws.on("message", (message: Buffer | string, isBinary) => {
+            this.ws.on("message", (message, isBinary) => {
                 if (isBinary) {
                     console.error("unknown message", message)
                 } else {
-                    message = new TextDecoder().decode(message as Buffer)
-                    if (message.startsWith("ok:")) {
-                        const key = message.substring(3)
+                    const msg = new TextDecoder().decode(message as Buffer)
+                    if (msg.startsWith("ok:")) {
+                        const key = msg.substring(3)
                         if (this.inProgress.has(key)) {
                             const appendReplica = this.inProgress.get(key)!
                             appendReplica.complete()
@@ -73,8 +73,8 @@ export default class Host {
                         } else {
                             console.error(`inProgress not found host=${this.host} key=${key}`)
                         }
-                    } else if (message.startsWith("err:")) {
-                        const [key, err] = message.substring(4).split(":")
+                    } else if (msg.startsWith("err:")) {
+                        const [key, err] = msg.substring(4).split(":")
                         if (key === "unknown") {
                             console.error(`unknown key error host=${this.host} err=${err}`)
                         } else {
@@ -87,7 +87,7 @@ export default class Host {
                             }
                         }
                     } else {
-                        console.error("unknown message", message)
+                        console.error("unknown message", msg)
                     }
                 }
             })
