@@ -337,6 +337,7 @@ async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
     const expectJSON = contentType.startsWith("application/json")
     const logIdBase64 = req.getParameter(0)
     const token = getToken(req)
+    const meta = req.getQuery("meta") === "true"
 
     res.onAborted(() => {
         res.aborted = true
@@ -360,7 +361,13 @@ async function getConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
         if (res.aborted) return
 
         res.cork(() => {
-            res.end(JSON.stringify(filterProtectedProperties((entry.entry as CommandLogEntry).value())))
+            if (meta) {
+                res.write(`{"entryNum":${entry.entryNum},"crc":${entry.cksumNum},"entry":`)
+                res.write(JSON.stringify(filterProtectedProperties((entry.entry as CommandLogEntry).value())))
+                res.end("}")
+            } else {
+                res.end(JSON.stringify(filterProtectedProperties((entry.entry as CommandLogEntry).value())))
+            }
         })
     } catch (err: any) {
         if (res.aborted) return
@@ -389,6 +396,7 @@ async function setConfig(server: Server, res: uWS.HttpResponse, req: uWS.HttpReq
             res.writeStatus("400")
             res.end(JSON.stringify({ error: INVALID_LAST_CONFIG_NUM_ERROR }))
         })
+        return
     }
 
     if (!logIdBase64 || logIdBase64.length !== 22) {
@@ -461,6 +469,7 @@ async function getHead(server: Server, res: uWS.HttpResponse, req: uWS.HttpReque
     const expectJSON = contentType.startsWith("application/json")
     const logIdBase64 = req.getParameter(0)
     const token = getToken(req)
+    const meta = req.getQuery("meta") === "true"
 
     res.onAborted(() => {
         res.aborted = true
@@ -484,17 +493,37 @@ async function getHead(server: Server, res: uWS.HttpResponse, req: uWS.HttpReque
         if (res.aborted) return
 
         res.cork(() => {
-            if (entry.entry instanceof CommandLogEntry) {
-                if (allowed.admin) {
-                    res.end(JSON.stringify(filterProtectedProperties(entry.entry.value())))
+            if (meta) {
+                if (entry.entry instanceof CommandLogEntry) {
+                    if (allowed.admin) {
+                        res.write(`{"entryNum":${entry.entryNum},"crc":${entry.cksumNum},"entry":`)
+                        res.write(JSON.stringify(filterProtectedProperties(entry.entry.value())))
+                        res.end("}")
+                    } else {
+                        res.end(`{"entryNum":${entry.entryNum},"entry":{}}`)
+                    }
                 } else {
-                    res.end("{}")
+                    if (allowed.read) {
+                        res.write(`{"entryNum":${entry.entryNum},"crc":${entry.cksumNum},"entry":`)
+                        res.write(entry.u8())
+                        res.end("}")
+                    } else {
+                        res.end(`{"entryNum":${entry.entryNum},"entry":{}}`)
+                    }
                 }
             } else {
-                if (allowed.read) {
-                    res.end(entry.u8())
+                if (entry.entry instanceof CommandLogEntry) {
+                    if (allowed.admin) {
+                        res.end(JSON.stringify(filterProtectedProperties(entry.entry.value())))
+                    } else {
+                        res.end("{}")
+                    }
                 } else {
-                    res.end("{}")
+                    if (allowed.read) {
+                        res.end(entry.u8())
+                    } else {
+                        res.end("{}")
+                    }
                 }
             }
         })
@@ -518,7 +547,7 @@ async function getEntries(server: Server, res: uWS.HttpResponse, req: uWS.HttpRe
     const offset = req.getQuery("offset")
     const limit = req.getQuery("limit")
     const entryNums = req.getQuery("entryNums")
-    const meta = req.getQuery("meta") === "true" ? true : false
+    const meta = req.getQuery("meta") === "true"
 
     res.onAborted(() => {
         res.aborted = true

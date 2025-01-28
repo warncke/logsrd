@@ -29,7 +29,6 @@ export default class AppendQueue {
         if (config !== null) {
             this.lastConfig = entry
         }
-        // TODO: WriteIOOperation should be refactored to support multiple entries
         const op = new WriteIOOperation(entry, this.log.logId)
         this.entries.push({ entry, op, config })
         this.process()
@@ -42,28 +41,31 @@ export default class AppendQueue {
         if (this.log.appendInProgress !== null) {
             return
         }
-        if (this.log.stopped) {
-            this.completeWithError(new Error("Log stopped"))
-        }
         // set this queue to in progress and create new queue for subsequent appends
         this.log.appendInProgress = this
         this.log.appendQueue = new AppendQueue(this.log)
         try {
-            let replicas
-            // start with log config replicas if config exists
-            if (this.log.config !== null) {
-                replicas = this.log.config.replicas
-            }
+            let config = this.log.config
+
             for (const entry of this.entries) {
-                // entry in queue may change config so switch to replicas from that
-                // config for that and any subsequent entries
+                // entry in queue may set new config which applies to subsequent entries
                 if (entry.config !== null) {
-                    replicas = entry.config.replicas
+                    config = entry.config
+                }
+                // log config should be set except for first create log entry which should
+                // have config attached so throw error if this is null
+                if (config === null) {
+                    throw new Error("No log config")
+                }
+                // if config is not being set then need to check if log has been stopped
+                else if (this.log.stopped || config.stopped) {
+                    this.completeWithError(new Error("Log stopped"))
+                    return
                 }
                 // replicate
-                if (replicas && replicas.length > 0) {
+                if (config.replicas && config.replicas.length > 0) {
                     await Promise.all(
-                        replicas.map((host) => this.log.server.replicate.appendReplica(host, entry.entry)),
+                        config.replicas.map((host) => this.log.server.replicate.appendReplica(host, entry.entry)),
                     )
                 }
                 // persist
@@ -73,8 +75,6 @@ export default class AppendQueue {
             }
             // resolve promise - everything calling waitHead or waitConfig will now resolve with correct entry
             this.complete()
-            // clear this queue now that it is complete
-            this.log.appendInProgress = null
             // schedule to run again
             setTimeout(() => {
                 this.log.appendQueue.process()
@@ -87,6 +87,8 @@ export default class AppendQueue {
             })
             // reject promise causing everything calling waitHead or waitConfig to error
             this.completeWithError(err)
+        } finally {
+            this.log.appendInProgress = null
         }
     }
 

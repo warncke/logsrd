@@ -4,6 +4,7 @@ import path from "path"
 import CommandLogEntry from "./entry/command-log-entry"
 import JSONCommandType from "./entry/command/command-type/json-command-type"
 import CreateLogCommand from "./entry/command/create-log-command"
+import SetConfigCommand from "./entry/command/set-config-command"
 import GlobalLogEntry from "./entry/global-log-entry"
 import LogEntry from "./entry/log-entry"
 import LogLogEntry from "./entry/log-log-entry"
@@ -53,7 +54,7 @@ export default class Log {
     }
 
     async stop() {
-        // TODO: persist this with SET_CONFIG but need to refactor LogConfig
+        // TODO: validate logic
         this.stopped = true
     }
 
@@ -253,7 +254,7 @@ export default class Log {
         return this.config
     }
 
-    async setConfig(setConfig: any, lastConfigNum: number): Promise<GlobalLogEntry> {
+    async setConfig(setConfig: any, lastConfigNum: number, unsafe: boolean = false): Promise<GlobalLogEntry> {
         // only allow one setConfig at a time
         if (
             (this.appendInProgress !== null && this.appendInProgress.hasConfig()) ||
@@ -263,13 +264,13 @@ export default class Log {
         }
 
         const configEntry = await this.getConfigEntry()
-        if (configEntry.entryNum !== lastConfigNum) {
+        if (!unsafe && configEntry.entryNum !== lastConfigNum) {
             throw new Error("lastConfigNum mismatch")
         }
 
         const newConfig = Object.assign((configEntry.entry as JSONCommandType).value(), setConfig)
         const config = await LogConfig.newFromJSON(newConfig)
-        const entry = await this.append(new CreateLogCommand({ value: config }), config)
+        const entry = await this.append(new SetConfigCommand({ value: config }), config)
         this.config = config
         return entry
     }
