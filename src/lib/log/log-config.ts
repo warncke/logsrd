@@ -1,6 +1,8 @@
 import Ajv, { ErrorObject, JSONSchemaType } from "ajv"
 import crypto from "mz/crypto"
 
+import LogAddress from "./log-address"
+
 export interface ILogConfig {
     logId: string
     type: string
@@ -17,7 +19,7 @@ export interface ILogConfig {
     jwtProperties?: string[]
     jwtSecret?: string
     stopped: boolean
-    configLog?: string
+    configLogAddress?: string | LogAddress
 }
 
 export const ProtectedProperties = [
@@ -105,7 +107,7 @@ export const LogConfigSchema: JSONSchemaType<ILogConfig> = {
             type: "boolean",
             default: false,
         },
-        configLog: {
+        configLogAddress: {
             type: "string",
             nullable: true,
         },
@@ -148,10 +150,14 @@ export default class LogConfig implements ILogConfig {
     jwtSecret?: string
     // @ts-ignore
     stopped: boolean
-    configLog?: string
+    configLogAddress?: string | LogAddress
 
     constructor(config: ILogConfig) {
         Object.assign(this, config)
+
+        if (config.configLogAddress && typeof config.configLogAddress === "string") {
+            this.configLogAddress = LogAddress.fromString(config.configLogAddress)
+        }
     }
 
     replicationGroup(): string[] {
