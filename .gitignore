@@ -3,3 +3,7 @@ build
 data
 data1
 data2
+
+# Testing artifacts
+coverage/
+test-dist/
