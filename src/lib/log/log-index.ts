@@ -26,7 +26,14 @@ export default class LogIndex {
     }
 
     hasEntry(entryNum: number): boolean {
-        return entryNum >= this.en[0] && entryNum <= this.en.at(-3)!
+        // Linear scan through entry numbers in the index
+        // The en array stores [entryNum, offset, length, ...] triplets
+        for (let i = 0; i < this.en.length; i += 3) {
+            if (this.en[i] === entryNum) {
+                return true
+            }
+        }
+        return false
     }
 
     entry(entryNum: number): [number, number, number] {

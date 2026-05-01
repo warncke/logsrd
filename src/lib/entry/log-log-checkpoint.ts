@@ -68,7 +68,7 @@ export default class LogLogCheckpoint extends LogEntry {
         return [TYPE_BYTE, this.u8(), new Uint8Array(new Uint32Array([this.cksum()]).buffer)]
     }
 
-    fromU8(u8: Uint8Array): LogLogCheckpoint {
+    static fromU8(u8: Uint8Array): LogLogCheckpoint {
         const entryType: number | undefined = u8.at(0)
         if (entryType !== EntryType.LOG_LOG_CHECKPOINT) {
             throw new Error(`Invalid entryType: ${entryType}`)

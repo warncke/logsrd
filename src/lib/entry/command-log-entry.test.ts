@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@jest/globals"
 
+import { EntryType } from "../globals.js"
 import CommandLogEntry from "./command-log-entry.js"
 
 describe("CommandLogEntry", () => {

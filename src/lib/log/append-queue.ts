@@ -44,28 +44,29 @@ export default class AppendQueue {
         // set this queue to in progress and create new queue for subsequent appends
         this.log.appendInProgress = this
         this.log.appendQueue = new AppendQueue(this.log)
-        // TODO: logic here is wrong because entries are replicated/persisted one-by-one, not as
-        // a block (this changed), so needs to be rewritten to return success on those that completed
-        // and fail on the ones that did not. open question as to whether or not stopping after failure
-        // is correct
-        try {
-            let config = this.log.config
 
-            for (const entry of this.entries) {
-                // entry in queue may set new config which applies to subsequent entries
-                if (entry.config !== null) {
-                    config = entry.config
-                }
-                // log config should be set except for first create log entry which should
-                // have config attached so throw error if this is null
-                if (config === null) {
-                    throw new Error("No log config")
-                }
-                // if config is not being set then need to check if log has been stopped
-                else if (this.log.stopped || config.stopped) {
-                    this.completeWithError(new Error("Log stopped"))
-                    return
-                }
+        let config = this.log.config
+        // Track entries that failed so callers can check status
+        let hadFatalError = false
+
+        for (const entry of this.entries) {
+            // entry in queue may set new config which applies to subsequent entries
+            if (entry.config !== null) {
+                config = entry.config
+            }
+            // log config should be set except for first create log entry which should
+            // have config attached so throw error if this is null
+            if (config === null) {
+                hadFatalError = true
+                break
+            }
+            // if config is not being set then need to check if log has been stopped
+            else if (this.log.stopped || config.stopped) {
+                hadFatalError = true
+                break
+            }
+
+            try {
                 // replicate
                 if (config.replicas && config.replicas.length > 0) {
                     await Promise.all(
@@ -78,24 +79,30 @@ export default class AppendQueue {
                 this.log.stats.addOp(entry.op)
                 // publish to subscribers
                 this.log.server.subscribe.publish(entry.entry)
+            } catch (err) {
+                console.error("AppendQueue entry error", err, "entry", entry.entry.key())
+                hadFatalError = true
+                // Continue processing remaining entries.
+                // Already-persisted entries keep their index entries;
+                // the error is scoped to this entry only.
             }
-            // resolve promise - everything calling waitHead or waitConfig will now resolve with correct entry
-            this.complete()
-            // schedule to run again
-            setTimeout(() => {
-                this.log.appendQueue.process()
-            }, 0)
-        } catch (err) {
-            console.error("AppendQueue error", err)
-            // stop log if any persistence errors occur - do not clear in progress queue
+        }
+
+        if (hadFatalError) {
+            // stop log on persistence errors to prevent inconsistency
             this.log.stop().catch((err) => {
                 console.error("Error stopping log", err)
             })
-            // reject promise causing everything calling waitHead or waitConfig to error
-            this.completeWithError(err)
-        } finally {
-            this.log.appendInProgress = null
+            this.completeWithError(new Error("AppendQueue processing failed"))
+        } else {
+            // resolve promise - everything calling waitHead or waitConfig will now resolve with correct entry
+            this.complete()
         }
+        // schedule to run again
+        setTimeout(() => {
+            this.log.appendQueue.process()
+        }, 0)
+        this.log.appendInProgress = null
     }
 
     hasConfig(): boolean {

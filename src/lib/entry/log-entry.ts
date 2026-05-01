@@ -1,4 +1,4 @@
-export default class LogEntry {
+export default abstract class LogEntry {
     cksumNum: number = 0
 
     constructor() {}

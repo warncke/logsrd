@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@jest/globals"
 
+import { EntryType } from "../globals.js"
 import LogLogCheckpoint from "./log-log-checkpoint.js"
 
 describe("LogLogCheckpoint", () => {
@@ -72,7 +73,7 @@ describe("LogLogCheckpoint", () => {
             fullBuffer.set(s, offset)
             offset += s.byteLength
         }
-        const deserialized = cp.fromU8(fullBuffer)
+        const deserialized = LogLogCheckpoint.fromU8(fullBuffer)
         expect(deserialized.lastEntryOffset).toBe(100)
         expect(deserialized.lastEntryLength).toBe(50)
         expect(deserialized.lastConfigOffset).toBe(200)
@@ -81,6 +82,6 @@ describe("LogLogCheckpoint", () => {
     it("should throw on invalid entry type in fromU8", () => {
         const cp = new LogLogCheckpoint({ lastEntryOffset: 100, lastEntryLength: 50, lastConfigOffset: 200 })
         const invalid = new Uint8Array([99, 1, 2, 3])
-        expect(() => cp.fromU8(invalid)).toThrow("Invalid entryType")
+        expect(() => LogLogCheckpoint.fromU8(invalid)).toThrow("Invalid entryType")
     })
 })

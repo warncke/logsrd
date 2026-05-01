@@ -41,7 +41,9 @@ export default class Subscribe {
         } else if (entry.entry instanceof JSONLogEntry) {
             this.server.uws.publish(logId, `{"entryNum":${entry.entryNum},"entry":${entry.entry.str()}}`, false)
         } else {
-            // TODO: binary log entries
+            // binary entries are base64 encoded
+            const binaryStr = Buffer.from(entry.u8()).toString("base64")
+            this.server.uws.publish(logId, `{"entryNum":${entry.entryNum},"entry":"${binaryStr}"}`, false)
         }
     }
 }

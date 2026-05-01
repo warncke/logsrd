@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@jest/globals"
 
+import { EntryType } from "../globals.js"
 import GlobalLogCheckpoint from "./global-log-checkpoint.js"
 
 describe("GlobalLogCheckpoint", () => {

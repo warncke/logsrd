@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@jest/globals"
 
+import { EntryType } from "../globals.js"
+import JSONLogEntry from "./json-log-entry.js"
 import LogEntryFactory from "./log-entry-factory.js"
 
 describe("LogEntryFactory", () => {
@@ -23,5 +25,11 @@ describe("LogEntryFactory", () => {
 
     it("should throw on undefined entryType in fromU8", () => {
         expect(() => LogEntryFactory.fromU8(new Uint8Array([]))).toThrow("Invalid entryType")
+    })
+
+    it("should parse a COMMAND type entry via fromU8", () => {
+        const commandU8 = new Uint8Array([EntryType.COMMAND, 0, 0x7b, 0x7d]) // COMMAND + CREATE_LOG + {}
+        const result = LogEntryFactory.fromU8(commandU8)
+        expect(result).toBeDefined()
     })
 })

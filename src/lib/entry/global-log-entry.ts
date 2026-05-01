@@ -8,10 +8,10 @@ export default class GlobalLogEntry extends LogEntry {
     entryNum: number
     logId: LogId
     entry: LogEntry
-    crc: Number | null
+    crc: number | null
     #prefixU8: Uint8Array | null = null
 
-    constructor({ entryNum, logId, entry, crc }: { entryNum: number; logId: LogId; entry: LogEntry; crc?: Number }) {
+    constructor({ entryNum, logId, entry, crc }: { entryNum: number; logId: LogId; entry: LogEntry; crc?: number }) {
         super()
         this.entryNum = entryNum
         this.logId = logId

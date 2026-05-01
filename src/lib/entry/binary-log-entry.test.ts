@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@jest/globals"
 
+import { EntryType } from "../globals.js"
 import BinaryLogEntry from "./binary-log-entry.js"
 
 describe("BinaryLogEntry", () => {

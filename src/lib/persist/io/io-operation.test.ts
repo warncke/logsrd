@@ -63,4 +63,20 @@ describe("IOOperation", () => {
         expect(op.endTime).toBeGreaterThan(0)
         jest.useRealTimers()
     })
+
+    it("should complete with resolve callback", async () => {
+        const op = new IOOperation(IOOperationType.WRITE)
+        const promise = op.promise
+        op.complete(op)
+        await expect(promise).resolves.toBe(op)
+        expect(op.endTime).toBeGreaterThan(0)
+    })
+
+    it("should completeWithError with reject callback", async () => {
+        const op = new IOOperation(IOOperationType.WRITE)
+        const promise = op.promise
+        op.completeWithError(new Error("test error"))
+        await expect(promise).rejects.toThrow("test error")
+        expect(op.endTime).toBeGreaterThan(0)
+    })
 })

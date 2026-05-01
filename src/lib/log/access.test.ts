@@ -212,3 +212,40 @@ describe("Access", () => {
         })
     })
 })
+
+describe("jwtSecretU8", () => {
+    it("should return jwtSecret as Uint8Array", async () => {
+        const log = createMockLog({
+            logId: "test",
+            type: "json",
+            master: "127.0.0.1:7000",
+            access: "private",
+            authType: "jwt",
+            jwtSecret: "dGVzdC1zZWNyZXQ=",
+            stopped: false,
+        })
+        ;(log as any).config = {
+            jwtSecret: "dGVzdC1zZWNyZXQ=",
+        }
+        const access = new Access(log as any)
+        const u8 = access.jwtSecretU8()
+        expect(u8).toBeInstanceOf(Uint8Array)
+        expect(u8.byteLength).toBeGreaterThan(0)
+        // Should be cached on second call
+        expect(access.jwtSecretU8()).toBe(u8)
+    })
+
+    it("should throw if no jwtSecret in config", async () => {
+        const log = createMockLog({
+            logId: "test",
+            type: "json",
+            master: "127.0.0.1:7000",
+            access: "private",
+            authType: "jwt",
+            stopped: false,
+        })
+        ;(log as any).config = {}
+        const access = new Access(log as any)
+        expect(() => access.jwtSecretU8()).toThrow("No jwtSecret")
+    })
+})

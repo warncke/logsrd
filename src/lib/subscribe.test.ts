@@ -1,11 +1,11 @@
 import { describe, expect, it, jest } from "@jest/globals"
 
-import Subscribe from "./subscribe.js"
-import GlobalLogEntry from "./entry/global-log-entry.js"
-import JSONLogEntry from "./entry/json-log-entry.js"
 import BinaryLogEntry from "./entry/binary-log-entry.js"
 import CommandLogEntry from "./entry/command-log-entry.js"
+import GlobalLogEntry from "./entry/global-log-entry.js"
+import JSONLogEntry from "./entry/json-log-entry.js"
 import LogId from "./log/log-id.js"
+import Subscribe from "./subscribe.js"
 
 function createMockServer() {
     return {
@@ -65,11 +65,7 @@ describe("Subscribe", () => {
         })
 
         subscribe.publish(entry)
-        expect(server.uws.publish).toHaveBeenCalledWith(
-            logIdBase64,
-            '{"entryNum":42,"entry":{"key":"value"}}',
-            false,
-        )
+        expect(server.uws.publish).toHaveBeenCalledWith(logIdBase64, '{"entryNum":42,"entry":{"key":"value"}}', false)
     })
 
     it("should not publish if no subscribers", () => {
@@ -104,10 +100,27 @@ describe("Subscribe", () => {
         })
 
         subscribe.publish(entry)
-        expect(server.uws.publish).toHaveBeenCalledWith(
-            logIdBase64,
-            '{"entryNum":10,"entry":{}}',
-            false,
-        )
+        expect(server.uws.publish).toHaveBeenCalledWith(logIdBase64, '{"entryNum":10,"entry":{}}', false)
     })
+})
+
+it("should publish binary entry as base64", () => {
+    const server = createMockServer() as any
+    const subscribe = new Subscribe(server)
+    const logId = new LogId(new Uint8Array(16))
+    const logIdBase64 = logId.base64()
+
+    subscribe.addSubscription(logIdBase64)
+
+    const binaryData = new Uint8Array([1, 2, 3, 4])
+    const entry = new GlobalLogEntry({
+        entryNum: 7,
+        logId,
+        entry: new BinaryLogEntry(binaryData),
+    })
+
+    subscribe.publish(entry)
+    // Binary data should be base64 encoded in the JSON payload
+    const base64Data = Buffer.from(binaryData).toString("base64")
+    expect(server.uws.publish).toHaveBeenCalledWith(logIdBase64, `{"entryNum":7,"entry":"${base64Data}"}`, false)
 })
