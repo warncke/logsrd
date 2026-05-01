@@ -76,7 +76,7 @@ export const LOG_LOG_PREFIX_BYTE_LENGTH = 11
  * Abstract base for all log entries.
  */
 export abstract class LogEntry {
-    protected cksumNum: number
+    cksumNum: number = 0
 
     /** @returns the raw payload as a single Uint8Array */
     abstract u8(): Uint8Array
@@ -89,12 +89,14 @@ export abstract class LogEntry {
 
     /** Compute and return the CRC-32 checksum for this entry.
      *  @param entryNum - the entry sequence number (used as seed) */
-    abstract cksum(entryNum: number): number
+    cksum(entryNum: number): number {
+        return 0
+    }
 
     /** For fixed‑size entries, the expected byte length; 0 for variable‑length */
-    static readonly expectedByteLength: number = 0
+    static expectedByteLength: number = 0
 
-    /** Deserialise a complete entry from a buffer */
+    /** Create a new LogEntry of the correct class from a complete buffer. */
     static fromU8(u8: Uint8Array): LogEntry {
         throw new Error("Not implemented")
     }
@@ -149,6 +151,19 @@ export class JSONCommandType extends CommandLogEntry {
     constructor(args: { commandNameU8?: Uint8Array; commandValueU8?: Uint8Array; value?: any })
     value(): any
     setValue(value: any): void
+}
+
+export class U32CommandType extends CommandLogEntry {
+    constructor(args: { commandNameU8?: Uint8Array; commandValueU8?: Uint8Array; value?: number })
+    value(): number
+    setValue(value: number): void
+    static expectedByteLength: number = 6
+}
+
+export class StringCommandType extends CommandLogEntry {
+    constructor(args: { commandNameU8?: Uint8Array; value?: string; commandValueU8?: Uint8Array })
+    value(): string
+    setValue(value: string): void
 }
 
 export class CreateLogCommand extends JSONCommandType {
@@ -478,6 +493,8 @@ export class AppendQueue {
     readonly log: Log
     entries: AppendQueueEntry[] = []
     promise: Promise<void>
+    resolve: (() => void) | null = null
+    reject: ((err: any) => void) | null = null
     lastConfig: GlobalLogEntry | null = null
 
     constructor(log: Log)
@@ -578,11 +595,14 @@ export abstract class PersistedLog {
   logFile: string = '';
   server: Server;
   ioQueue: GlobalLogIOQueue | IOQueue = new IOQueue();
+  writeFH: FileHandle | null = null;
+  freeReadFhs: Array<FileHandle> = [];
+  openReadFhs: Array<FileHandle> = [];
+  openingReadFhs: number = 0;
+  maxReadFHs: number = 1;
   byteLength: number = 0;
   ioBlocked: boolean = false;
   ioInProgress: Promise<void> | null = null;
-  maxReadFHs: number = 1;
-
   constructor(server: Server);
 
   blockIO(): Promise<void>;
@@ -647,6 +667,8 @@ export class Persist {
   readonly server: Server;
   oldHotLog: HotLog;
   newHotLog: HotLog;
+  emptyOldHotLogInProgress: Promise<void> | null = null;
+  moveNewToOldHotLogInProgress: Promise<void> | null = null;
 
   constructor(server: Server);
   init(): Promise<void>;
@@ -655,6 +677,7 @@ export class Persist {
   emptyOldHotLog(): Promise<void>;
   moveNewToOldHotLog(): Promise<void>;
 }
+
 ```
 
 ### 2.11 Networking
@@ -1036,3 +1059,43 @@ node dist/server.js
 | `HOST_MONITOR_INTERVAL` | `10000`     | Health‑check interval (ms)                                           |
 
 The server creates a `uWS.App()` and registers all REST and WebSocket routes before calling `listen()`.
+
+---
+
+## 7. Known Issues
+
+The following issues have been identified during a compliance review of the implementation against this specification.
+
+### 7.1 LogIndex.entry() Sequential Assumption
+
+The `LogIndex.entry()` method uses a direct indexing formula `(entryNum - en[0]) * 3` to locate entries in the flat `en` array. In contrast, `hasEntry()` uses a linear scan. If gaps exist in the entry number sequence (e.g., after partial crash recovery or a replayed entry range), `entry()` would silently return incorrect triples. The method should either use a linear scan (like `hasEntry()`) or validate that entries are contiguous before applying the formula.
+
+### 7.2 Import Mismatch in LogStats (`ReadIOOperation`)
+
+`src/lib/log/log-stats.ts` imports `ReadIOOperation` from `"../persist/io/read-range-io-operation"`, but that file exports `ReadRangeIOOperation`. The canonical `ReadIOOperation` union type is defined in `globals.ts`. This is a TypeScript module‑resolution issue; the cast `(op as ReadIOOperation).bytesRead` works at runtime only because the imported symbol resolves to the `ReadRangeIOOperation` class, which happens to have a `bytesRead` property. This should be corrected to import from `"../globals"`.
+
+### 7.3 Inconsistent Checkpoint CRC Computation
+
+`GlobalLogCheckpoint.cksum()` seeds the CRC-32 computation with the entry type byte via `crc32(this.u8(), crc32(TYPE_BYTE))`, while `LogLogCheckpoint.cksum()` computes `crc32(this.u8())` without any seed. All other entry types (`BinaryLogEntry`, `JSONLogEntry`, `CommandLogEntry`) consistently use the pattern `crc32(data, crc32(TYPE, entryNum))`. The `LogLogCheckpoint` CRC routine should be aligned to use a consistent seeding strategy.
+
+### 7.4 ReadRangeIOOperation ("not implemented")
+
+The `_processReadRangeOp` method in `PersistedLog` throws `new Error("not implemented")`. This operation type is declared in `IOOperationType` and has an associated `ReadRangeIOOperation` class, but no actual implementation exists.
+
+### 7.5 Missing Class Specifications
+
+The following classes exist in the implementation but are not documented in this specification:
+
+- **`U32CommandType`** (`src/lib/entry/command/command-type/u32-command-type.ts`): Command type for 32‑bit unsigned integer values. Extends `CommandLogEntry`.
+- **`StringCommandType`** (`src/lib/entry/command/command-type/string-command-type.ts`): Command type for string values. Extends `CommandLogEntry`.
+
+These have been added to §2.2 in this revision.
+
+### 7.6 Host.lastPing / lastPong (Unused Fields)
+
+The `Host` class declares `lastPing` and `lastPong` properties in the specification, but the implementation does not use them for any health‑check or timeout logic.
+
+### 7.7 Checkpoint Boundary Edge Case
+
+Both `HotLog._processReadLogEntry()` and `LogLog._processReadLogEntry()` check for the case where an entry starts exactly at a checkpoint boundary (`offset === nextCheckpointOffset`) and throw an error. This condition should never occur under normal operation, but if it does, it causes a crash rather than attempting recovery.
+
