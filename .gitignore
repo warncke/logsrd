@@ -7,3 +7,5 @@ data2
 # Testing artifacts
 coverage/
 test-dist/
+
+.opencode/skills/

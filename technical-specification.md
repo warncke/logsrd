@@ -1,1101 +1,678 @@
-# LogsR — Technical Specification
+# logsrd — Technical Specification
 
-## Version 0.1.0
-
----
-
-## 1. Overview
-
-LogsR is a distributed append‑only log server built on **uWebSockets.js**.  
-It provides:
-
-- **Create, append, read** operations on named logs identified by random 128‑bit IDs.
-- **Token / JWT access control** with admin, read, and write permissions.
-- **Synchronous replication** to configured replicas before acknowledgement.
-- **Dual hot‑log rotation** with embedded checkpoints for crash‑consistent recovery.
-- **Per‑log cold storage** (LogLog) that archives entries flushed from the hot logs.
-- **WebSocket pub/sub** for real‑time streaming of new entries.
-- **Pluggable entry types**: JSON, Binary, and internal Commands (CreateLog, SetConfig).
-
-### Data Flow Summary
-
-1. Client appends data → Server checks authorisation → Log creates `GlobalLogEntry` → enqueues in `AppendQueue`.
-2. AppendQueue replicates to replicas → persists to `newHotLog` → publishes to subscribers.
-3. Persist monitor periodically rotates hot logs: empties old hot log entries into per‑log LogLog files, then swaps new→old and starts a fresh new hot log.
+> **Project:** logsrd — A Synchronously Replicated Distributed Log Server
+> **Language:** TypeScript (ES2022)
+> **Runtime:** Node.js + uWebSockets.js
+> **Testing:** Jest 30 + ts-jest
+> **Spec tree:** 83 file-level specs across 8 sub-modules
 
 ---
 
-## 2. Component Specifications
-
-All classes are presented as self‑contained TypeScript **interface specifications** (signatures only, no implementation).  
-The design is intended to be trivially portable to C (opaque struct pointers) and Rust (`struct` with `pub` methods).
-
-### 2.1 Enumerations & Constants
-
-```typescript
-export enum EntryType {
-    GLOBAL_LOG,
-    LOG_LOG,
-    GLOBAL_LOG_CHECKPOINT,
-    LOG_LOG_CHECKPOINT,
-    COMMAND,
-    BINARY,
-    JSON,
-}
-
-export enum CommandName {
-    CREATE_LOG,
-    SET_CONFIG,
-}
-
-export enum IOOperationType {
-    READ_ENTRY,
-    READ_ENTRIES,
-    READ_RANGE,
-    WRITE,
-}
-
-export type ReadIOOperation = ReadEntryIOOperation | ReadEntriesIOOperation | ReadRangeIOOperation
-
-export const MAX_ENTRY_SIZE = 32768 // 32 KB
-export const MAX_LOG_SIZE = 16777216 // 16 MB
-export const MAX_RESPONSE_ENTRIES = 100
-
-export const GLOBAL_LOG_CHECKPOINT_INTERVAL = 131072 // 128 KB
-export const GLOBAL_LOG_CHECKPOINT_BYTE_LENGTH = 9
-export const LOG_LOG_CHECKPOINT_INTERVAL = 131072
-export const LOG_LOG_CHECKPOINT_BYTE_LENGTH = 13
-export const GLOBAL_LOG_PREFIX_BYTE_LENGTH = 27
-export const LOG_LOG_PREFIX_BYTE_LENGTH = 11
-```
-
-### 2.2 Entry Types
-
-```typescript
-/**
- * Abstract base for all log entries.
- */
-export abstract class LogEntry {
-    cksumNum: number = 0
-
-    /** @returns the raw payload as a single Uint8Array */
-    abstract u8(): Uint8Array
-
-    /** @returns an array of segments for scatter/gather writes */
-    abstract u8s(): Uint8Array[]
-
-    /** @returns total byte length of the serialised entry */
-    abstract byteLength(): number
-
-    /** Compute and return the CRC-32 checksum for this entry.
-     *  @param entryNum - the entry sequence number (used as seed) */
-    cksum(entryNum: number): number {
-        return 0
-    }
-
-    /** For fixed‑size entries, the expected byte length; 0 for variable‑length */
-    static expectedByteLength: number = 0
-
-    /** Create a new LogEntry of the correct class from a complete buffer. */
-    static fromU8(u8: Uint8Array): LogEntry {
-        throw new Error("Not implemented")
-    }
-
-    /** Attempt to deserialise a possibly incomplete buffer.
-     *  Returns the entry, the number of missing bytes, or an error. */
-    static fromPartialU8(u8: Uint8Array): {
-        entry?: LogEntry | null
-        needBytes?: number
-        err?: Error
-    } {
-        throw new Error("Not implemented")
-    }
-}
-```
-
-#### Binary / JSON / Command
-
-```typescript
-export class BinaryLogEntry extends LogEntry {
-    constructor(u8: Uint8Array)
-    byteLength(): number
-    cksum(entryNum: number): number
-    u8(): Uint8Array
-    u8s(): Uint8Array[]
-    static fromU8(u8: Uint8Array): BinaryLogEntry
-}
-
-export class JSONLogEntry extends LogEntry {
-    constructor(args: { jsonStr?: string | null; jsonU8?: Uint8Array | null })
-    byteLength(): number
-    cksum(entryNum: number): number
-    u8(): Uint8Array
-    u8s(): Uint8Array[]
-    str(): string
-    static fromU8(u8: Uint8Array): JSONLogEntry
-}
-
-export class CommandLogEntry extends LogEntry {
-    readonly commandNameU8: Uint8Array
-    readonly commandValueU8: Uint8Array
-
-    constructor(args: { commandNameU8: Uint8Array; commandValueU8: Uint8Array })
-    byteLength(): number
-    cksum(entryNum: number): number
-    u8(): Uint8Array
-    u8s(): Uint8Array[]
-    value(): any
-}
-
-export class JSONCommandType extends CommandLogEntry {
-    constructor(args: { commandNameU8?: Uint8Array; commandValueU8?: Uint8Array; value?: any })
-    value(): any
-    setValue(value: any): void
-}
-
-export class U32CommandType extends CommandLogEntry {
-    constructor(args: { commandNameU8?: Uint8Array; commandValueU8?: Uint8Array; value?: number })
-    value(): number
-    setValue(value: number): void
-    static expectedByteLength: number = 6
-}
-
-export class StringCommandType extends CommandLogEntry {
-    constructor(args: { commandNameU8?: Uint8Array; value?: string; commandValueU8?: Uint8Array })
-    value(): string
-    setValue(value: string): void
-}
-
-export class CreateLogCommand extends JSONCommandType {
-    constructor(args: { commandValueU8?: Uint8Array; value?: any })
-}
-
-export class SetConfigCommand extends JSONCommandType {
-    constructor(args: { commandValueU8?: Uint8Array; value?: any })
-}
-```
-
-#### Wrappers & Checkpoints
-
-```typescript
-export class GlobalLogEntry extends LogEntry {
-    readonly entryNum: number
-    readonly logId: LogId
-    readonly entry: LogEntry
-    readonly crc: number | null
-
-    constructor(args: { entryNum: number; logId: LogId; entry: LogEntry; crc?: number })
-    key(): string // `${logId.base64()}-${entryNum}`
-    byteLength(): number
-    cksum(): number
-    prefixU8(): Uint8Array // 27‑byte header
-    u8(): Uint8Array
-    u8s(): Uint8Array[]
-    verify(): boolean
-}
-
-export class LogLogEntry extends LogEntry {
-    readonly entry: LogEntry
-    readonly entryNum: number
-    readonly crc: number | null
-
-    constructor(args: { entry: LogEntry; entryNum: number; crc?: number })
-    byteLength(): number
-    cksum(): number
-    prefixU8(): Uint8Array // 11‑byte header
-    u8(): Uint8Array
-    u8s(): Uint8Array[]
-    verify(): boolean
-}
-
-export class GlobalLogCheckpoint extends LogEntry {
-    readonly lastEntryOffset: number
-    readonly lastEntryLength: number
-    readonly crc: number | null
-
-    constructor(args: { lastEntryOffset: number; lastEntryLength: number; crc?: number })
-    byteLength(): number // always 9
-    cksum(): number
-    verify(): boolean
-    u8(): Uint8Array
-    u8s(): Uint8Array[]
-    static fromU8(u8: Uint8Array): GlobalLogCheckpoint
-}
-
-export class LogLogCheckpoint extends LogEntry {
-    readonly lastEntryOffset: number
-    readonly lastEntryLength: number
-    readonly lastConfigOffset: number
-    readonly crc: number | null
-
-    constructor(args: { lastEntryOffset: number; lastEntryLength: number; lastConfigOffset: number; crc?: number })
-    byteLength(): number // always 13
-    cksum(entryNum?: number): number
-    verify(): boolean
-    u8(): Uint8Array
-    u8s(): Uint8Array[]
-    static fromU8(u8: Uint8Array): LogLogCheckpoint
-}
-```
-
-### 2.3 Factories
-
-```typescript
-export class LogEntryFactory {
-    static fromU8(u8: Uint8Array): LogEntry
-    static fromPartialU8(u8: Uint8Array): {
-        entry?: LogEntry | null
-        needBytes?: number
-        err?: Error
-    }
-}
-
-export class GlobalLogEntryFactory {
-    static fromU8(u8: Uint8Array): GlobalLogEntry
-    static fromPartialU8(u8: Uint8Array): {
-        entry?: LogLogEntry | GlobalLogEntry | null
-        needBytes?: number
-        err?: Error
-    }
-}
-
-export class LogLogEntryFactory {
-    static fromU8(u8: Uint8Array): LogLogEntry
-    static fromPartialU8(u8: Uint8Array): {
-        entry?: LogLogEntry | null
-        needBytes?: number
-        err?: Error
-    }
-}
-
-export class CommandLogEntryFactory {
-    static fromU8(u8: Uint8Array): CommandLogEntry
-}
-```
-
-### 2.4 Log Identity & Addressing
-
-```typescript
-export class LogId {
-    readonly logId: Uint8Array
-
-    constructor(logId: Uint8Array, base64?: string)
-    base64(): string
-    byteLength(): number
-    u8s(): Uint8Array[]
-    toJSON(): string
-    logDirPrefix(): string // "XX/YY" from first two bytes
-
-    static newRandom(): Promise<LogId>
-    static newFromBase64(base64: string): LogId
-}
-
-export class LogHost {
-    master: string
-    replicas: string[]
-
-    constructor(master: string, replicas?: string[])
-    static fromString(host: string): LogHost
-    toString(): string
-}
-
-export class LogAddress {
-    logIdBase64: string
-    host: LogHost | null
-    config: LogHost[] | null
-
-    constructor(logIdBase64: string, host?: LogHost | null, config?: LogHost[] | null)
-    setConfig(config: LogHost[]): void
-    setHost(host: LogHost): void
-    toString(): string
-    static fromString(logAddress: string): LogAddress
-}
-```
-
-### 2.5 Configuration
-
-```typescript
-export interface ILogConfig {
-    logId: string
-    type: string // "binary" | "json"
-    master: string
-    replicas?: string[]
-    asyncReplicas?: string[]
-    access: string // "public" | "private" | "readOnly" | "writeOnly"
-    authType: string // "token" | "jwt"
-    accessToken?: string
-    adminToken?: string
-    readToken?: string
-    writeToken?: string
-    superToken?: string
-    jwtProperties?: string[]
-    jwtSecret?: string
-    stopped: boolean
-    configLogAddress?: string | LogAddress
-}
-
-export class LogConfig implements ILogConfig {
-    // all ILogConfig fields
-    logId!: string
-    type!: string
-    master!: string
-    replicas?: string[]
-    asyncReplicas?: string[]
-    access!: string
-    authType!: string
-    accessToken?: string
-    adminToken?: string
-    readToken?: string
-    writeToken?: string
-    superToken?: string
-    jwtProperties?: string[]
-    jwtSecret?: string
-    stopped!: boolean
-    configLogAddress?: string | LogAddress
-
-    constructor(config: ILogConfig)
-    replicationGroup(): string[] // [master, ...replicas]
-    setDefaults(): Promise<void> // generate missing tokens/secrets
-    static newFromJSON(json: any): Promise<LogConfig>
-}
-```
-
-### 2.6 Log Index & Statistics
-
-```typescript
-export class LogIndex {
-    en: number[] = [] // [entryNum, offset, length, ...]
-    lcNum: number | null = null
-    lcOff: number | null = null
-    lcLen: number | null = null
-
-    addEntry(entry: LogEntry, entryNum: number, offset: number, length: number): void
-    hasEntry(entryNum: number): boolean
-    entry(entryNum: number): [number, number, number]
-    entries(): number[]
-    entryCount(): number
-    appendIndex(index: LogIndex): void
-    byteLength(prefixByteLength: number): number
-    hasConfig(): boolean
-    lastConfig(): [number, number, number]
-    lastConfigEntryNum(): number
-    hasEntries(): boolean
-    lastEntry(): [number, number, number]
-    maxEntryNum(): number
-}
-
-export class GlobalLogIndex extends LogIndex {
-    byteLength(): number // uses GLOBAL_LOG_PREFIX_BYTE_LENGTH
-}
-
-export class LogLogIndex extends LogIndex {
-    byteLength(): number // uses LOG_LOG_PREFIX_BYTE_LENGTH
-}
-
-export class LogStats {
-    ioReads: number = 0
-    bytesRead: number = 0
-    ioReadTimeAvg: number = 0
-    ioReadTimeMax: number = 0
-    ioReadLastTime: number = 0
-    ioWrites: number = 0
-    bytesWritten: number = 0
-    ioWriteTimeAvg: number = 0
-    ioWriteTimeMax: number = 0
-    ioWriteLastTime: number = 0
-
-    addOp(op: IOOperation): void
-}
-```
-
-### 2.7 Access Control
-
-```typescript
-export type AccessAllowed = {
-    admin: boolean
-    read: boolean
-    write: boolean
-}
-
-export class Access {
-    readonly log: Log
-
-    constructor(log: Log)
-    accessAllowed(admin: boolean, read: boolean, write: boolean): AccessAllowed
-    allowed(token: string | null): Promise<AccessAllowed>
-    allowAdmin(token: string | null): Promise<boolean>
-    allowRead(token: string | null): Promise<boolean>
-    allowWrite(token: string | null): Promise<boolean>
-    jwtSecretU8(): Uint8Array
-}
-```
-
-### 2.8 Log Orchestrator
-
-```typescript
-export class Log {
-    readonly server: Server
-    readonly logId: LogId
-    readonly access: Access
-    readonly stats: LogStats
-
-    newHotLogIndex: GlobalLogIndex | null
-    oldHotLogIndex: GlobalLogIndex | null
-    logLogIndex: LogLogIndex | null
-    logLog: LogLog | null
-    creating: boolean
-    config: LogConfig | null
-    appendInProgress: AppendQueue | null
-    appendQueue: AppendQueue
-    stopped: boolean
-
-    constructor(server: Server, logId: LogId)
-
-    getLogLog(): Promise<LogLog>
-    stop(): Promise<void>
-
-    append(entry: LogEntry, config?: LogConfig | null): Promise<GlobalLogEntry>
-    appendOp(target: PersistedLog, entry: GlobalLogEntry | LogLogEntry): Promise<WriteIOOperation>
-    readEntryOp(target: PersistedLog, index: LogIndex, entryNum: number): Promise<ReadEntryIOOperation>
-    readEntriesOp(target: PersistedLog, index: LogIndex, entryNums: number[]): Promise<ReadEntriesIOOperation>
-
-    moveNewToOldHotLog(): void
-    emptyOldHotLog(): Promise<void>
-
-    create(config: LogConfig): Promise<GlobalLogEntry>
-    exists(): Promise<boolean>
-
-    getConfig(): Promise<LogConfig>
-    setConfig(setConfig: any, lastConfigNum: number, unsafe?: boolean): Promise<GlobalLogEntry>
-    getConfigEntry(): Promise<GlobalLogEntry | LogLogEntry>
-    hasGlobalConfig(): boolean
-    readConfigTargetIndexEntryNum(): [PersistedLog, LogIndex, number]
-    lastLogConfigOffset(): number
-
-    getHead(): Promise<GlobalLogEntry | LogLogEntry>
-    readHeadTargetIndexEntryNum(): [PersistedLog, LogIndex, number]
-
-    getEntryNums(entryNums: number[]): Promise<Array<GlobalLogEntry | LogLogEntry>>
-    getEntries(offset: number, limit: number): Promise<Array<GlobalLogEntry | LogLogEntry>>
-    lastEntryNum(): number
-
-    addNewHotLogEntry(entry: LogEntry, entryNum: number, entryOffset: number, length: number): void
-    addOldHotLogEntry(entry: LogEntry, entryNum: number, entryOffset: number, length: number): void
-    addLogLogEntry(entry: LogEntry, entryNum: number, entryOffset: number, length: number): void
-
-    newHotLogEntryCount(): number
-    oldHotLogEntryCount(): number
-    logLogEntryCount(): number
-    filename(): string
-}
-
-export class AppendQueue {
-    readonly log: Log
-    entries: AppendQueueEntry[] = []
-    promise: Promise<void>
-    resolve: (() => void) | null = null
-    reject: ((err: any) => void) | null = null
-    lastConfig: GlobalLogEntry | null = null
-
-    constructor(log: Log)
-    enqueue(entry: GlobalLogEntry, config?: LogConfig | null): void
-    process(): Promise<void>
-    hasConfig(): boolean
-    hasEntries(): boolean
-    waitHead(): Promise<GlobalLogEntry>
-    waitConfig(): Promise<GlobalLogEntry>
-    complete(retried?: boolean): void
-    completeWithError(err: any, retried?: boolean): void
-}
-
-type AppendQueueEntry = {
-    entry: GlobalLogEntry
-    op: WriteIOOperation
-    config: LogConfig | null
-}
-```
-
-### 2.9 IO Operations & Queues
-
-```typescript
-export class IOOperation {
-    readonly op: IOOperationType
-    readonly logId: LogId | null
-    readonly promise: Promise<any>
-    readonly startTime: number
-    readonly order: number
-    endTime: number = 0
-    processing: boolean = false
-
-    constructor(op: IOOperationType, logId?: LogId | null, promise?: Promise<any>, resolve?: any, reject?: any)
-    complete(op: IOOperation, retried?: boolean): void
-    completeWithError(error: any, retried?: boolean): void
-}
-
-export class ReadEntryIOOperation extends IOOperation {
-    index: LogIndex
-    entryNum: number
-    entry: GlobalLogEntry | LogLogEntry | null = null
-    bytesRead: number = 0
-
-    constructor(logId: LogId, index: LogIndex, entryNum: number)
-}
-
-export class ReadEntriesIOOperation extends IOOperation {
-    index: LogIndex
-    entryNums: number[]
-    entries: Array<GlobalLogEntry | LogLogEntry> | null = null
-    bytesRead: number = 0
-
-    constructor(logId: LogId, index: LogIndex, entryNums: number[])
-}
-
-export class ReadRangeIOOperation extends IOOperation {
-    reads: number[] | null
-    buffers: Uint8Array[] = []
-    bytesRead: number = 0
-
-    constructor(reads?: number[] | null, logId?: LogId | null)
-}
-
-export class WriteIOOperation extends IOOperation {
-    entry: GlobalLogEntry | LogLogEntry
-    entryNum: number | null = null
-    bytesWritten: number = 0
-
-    constructor(entry: GlobalLogEntry | LogLogEntry, logId?: LogId | null, entryNum?: number | null)
-}
-
-export class IOQueue {
-    readQueue: ReadIOOperation[] = []
-    writeQueue: WriteIOOperation[] = []
-
-    getReady(): [ReadIOOperation[], WriteIOOperation[]]
-    drain(): [ReadIOOperation[], WriteIOOperation[]]
-    opPending(): boolean
-    enqueue(op: IOOperation): void
-}
-
-export class GlobalLogIOQueue {
-    queues: Map<string, IOQueue> = new Map()
-
-    enqueue(item: IOOperation): void
-    deleteLogQueue(logId: LogId): IOQueue | null
-    getLogQueue(logId: LogId): IOQueue
-    getGlobalQueue(): IOQueue
-    getReady(): [ReadIOOperation[], WriteIOOperation[]]
-    opPending(): boolean
-}
-```
-
-### 2.10 Persistence
-
-```typescript
-export abstract class PersistedLog {
-  logFile: string = '';
-  server: Server;
-  ioQueue: GlobalLogIOQueue | IOQueue = new IOQueue();
-  writeFH: FileHandle | null = null;
-  freeReadFhs: Array<FileHandle> = [];
-  openReadFhs: Array<FileHandle> = [];
-  openingReadFhs: number = 0;
-  maxReadFHs: number = 1;
-  byteLength: number = 0;
-  ioBlocked: boolean = false;
-  ioInProgress: Promise<void> | null = null;
-  constructor(server: Server);
-
-  blockIO(): Promise<void>;
-  unblockIO(): void;
-  waitInProgress(): Promise<void>;
-  closeAllFHs(): Promise<void>;
-  getReadFH(): FileHandle | null;
-  closeReadFH(fh: FileHandle): void;
-  doneReadFH(fh: FileHandle): void;
-  getWriteFH(): Promise<FileHandle>;
-  closeWriteFH(): Promise<void>;
-
-  enqueueOp(op: IOOperation): void;
-  enqueueOps(ops: IOOperation[]): void;
-  processOps(): void;
-  processOpsAsync(): Promise<void>;
-  processReadOps(ops: ReadIOOperation[]): Promise<void>;
-  processWriteOps(ops: WriteIOOperation[]): Promise<void>;
-  truncate(byteLength: number): Promise<void>;
-
-  init(
-    logEntryFactory: typeof GlobalLogEntryFactory | typeof LogLogEntryFactory,
-    checkpointClass: typeof GlobalLogCheckpoint | typeof LogLogCheckpoint,
-    checkpointInterval: number
-  ): Promise<void>;
-
-  initLogLogEntry(entry: LogLogEntry, entryOffset: number): void;
-  initGlobalLogEntry(entry: GlobalLogEntry, entryOffset: number): void;
-
-  protected abstract _processReadLogEntry(
-    fh: FileHandle, logId: LogId, entryNum: number, offset: number, length: number
-  ): Promise<[GlobalLogEntry | LogLogEntry, number]>;
-}
-
-export class HotLog extends PersistedLog {
-  readonly ioQueue: GlobalLogIOQueue;
-  readonly isNew: boolean;
-  maxReadFHs: number = 16;
-
-  constructor(server: Server, isNew: boolean);
-  logName(): string;
-  processWriteOps(ops: WriteIOOperation[]): Promise<void>;
-  init(): Promise<void>;
-  initGlobalLogEntry(entry: GlobalLogEntry, entryOffset: number): void;
-  addEntryToIndex(entry: GlobalLogEntry, entryOffset: number): void;
-  _processReadLogEntry(...): Promise<[GlobalLogEntry, number]>;
-}
-
-export class LogLog extends PersistedLog {
-  readonly log: Log;
-  maxReadFHs: number = 4;
-
-  constructor(server: Server, log: Log);
-  logName(): string;
-  processWriteOps(ops: WriteIOOperation[]): Promise<void>;
-  init(): Promise<void>;
-  initLogLogEntry(entry: LogLogEntry, entryOffset: number): void;
-  _processReadLogEntry(...): Promise<[LogLogEntry, number]>;
-}
-
-export class Persist {
-  readonly server: Server;
-  oldHotLog: HotLog;
-  newHotLog: HotLog;
-  emptyOldHotLogInProgress: Promise<void> | null = null;
-  moveNewToOldHotLogInProgress: Promise<void> | null = null;
-
-  constructor(server: Server);
-  init(): Promise<void>;
-  monitor(): void;
-  globalIndexEntryCounts(): { newHotLog: number; oldHotLog: number };
-  emptyOldHotLog(): Promise<void>;
-  moveNewToOldHotLog(): Promise<void>;
-}
-
-```
-
-### 2.11 Networking
-
-```typescript
-export interface ServerConfig {
-    host: string
-    dataDir: string
-    pageSize: number
-    globalIndexCountLimit: number
-    globalIndexSizeLimit: number
-    hotLogFileName?: string
-    blobDir?: string
-    logDir?: string
-    hosts: string[]
-    hostMonitorInterval: number
-    replicatePath: string
-    replicateTimeout: number
-    secret: string
-}
-
-export class Server {
-    readonly config: ServerConfig
-    readonly persist: Persist
-    readonly replicate: Replicate
-    readonly subscribe: Subscribe
-    readonly uws: TemplatedApp
-    readonly logs: Map<string, Log>
-
-    constructor(config: ServerConfig, uws: TemplatedApp)
-    delLog(logId: LogId): void
-    getLog(logId: LogId): Log
-    init(): Promise<void>
-
-    createLog(config: any): Promise<GlobalLogEntry>
-    appendLog(
-        logId: LogId,
-        token: string | null,
-        data: Uint8Array,
-        lastEntryNum: number | null,
-    ): Promise<GlobalLogEntry>
-    appendReplica(entry: GlobalLogEntry): Promise<GlobalLogEntry>
-
-    getConfig(
-        logId: LogId,
-        token: string | null,
-    ): Promise<{ allowed: AccessAllowed; entry: GlobalLogEntry | LogLogEntry }>
-    setConfig(
-        logId: LogId,
-        token: string | null,
-        setConfig: any,
-        lastConfigNum: number,
-    ): Promise<GlobalLogEntry | LogLogEntry>
-
-    getEntries(
-        logId: LogId,
-        token: string | null,
-        entryNums?: string | number[],
-        offset?: string | number,
-        limit?: string | number,
-    ): Promise<{ allowed: AccessAllowed; entries: Array<GlobalLogEntry | LogLogEntry> }>
-    getHead(
-        logId: LogId,
-        token: string | null,
-    ): Promise<{ allowed: AccessAllowed; entry: GlobalLogEntry | LogLogEntry }>
-    deleteLog(logId: LogId): Promise<boolean>
-}
-
-export class Replicate {
-    readonly server: Server
-    readonly hosts: Map<string, Host>
-
-    constructor(server: Server)
-    appendReplica(host: string, entry: GlobalLogEntry): Promise<void>
-}
-
-export class Host {
-    readonly host: string
-    readonly replicate: Replicate
-    ws: WebSocket | null = null
-    lastError: Error | null = null
-    connectStart: number | null = null
-    connectFinish: number | null = null
-    lastPing: number | null = null
-    lastPong: number | null = null
-
-    constructor(replicate: Replicate, host: string)
-    appendReplica(entry: GlobalLogEntry): Promise<void>
-    connect(): void
-    monitor(): void
-    send(appendReplica: AppendReplica): void
-    sendAll(): void
-}
-
-export class AppendReplica {
-    readonly host: Host
-    readonly entry: GlobalLogEntry
-    readonly promise: Promise<void>
-    readonly start: number
-    sent: boolean = false
-
-    constructor(host: Host, entry: GlobalLogEntry)
-    timeout(): void
-    complete(retried?: boolean): void
-    completeWithError(err: any, retried?: boolean): void
-}
-
-export class Subscribe {
-    readonly server: Server
-    readonly subscriptions: Map<string, boolean>
-
-    constructor(server: Server)
-    allowSubscription(logId: LogId, token?: string | null): Promise<boolean>
-    addSubscription(logId: string): void
-    delSubscription(logId: string): void
-    hasSubscription(logId: string): boolean
-    publish(entry: GlobalLogEntry): void
-}
-```
+## §1 Overview
+
+logsrd is a **synchronously-replicated distributed append-only log server**. Clients write entries via an HTTP REST API; every append is synchronously replicated to all configured peer nodes before the HTTP response is returned. The system provides:
+
+- **REST API** — create, append, read, configure logs over HTTP
+- **WebSocket replication** — binary protocol for server-to-server synchronous replication
+- **Pub/Sub subscriptions** — WebSocket endpoint for real-time log entry delivery to clients
+- **Two-tier persistence** — global hot log (new + old) with periodic compaction into per-log log-of-logs
+
+### Module Reference Table
+
+| Module | Facade | Spec Path |
+|---|---|---|
+| Entry Types | EntryModule | `source/src/lib/entry/EntryModule.spec.md` |
+| Log Abstraction | LogModule | `source/src/lib/log/LogModule.spec.md` |
+| Persistence | PersistModule | `source/src/lib/persist/PersistModule.spec.md` |
+| IO Operations | IOModule | `source/src/lib/persist/io/IOModule.spec.md` |
+| Replication | ReplicateModule | `source/src/lib/replicate/ReplicateModule.spec.md` |
+| Server | ServerModule | `source/src/lib/server/ServerModule.spec.md` |
+| Globals & Constants | GlobalsModule | `source/src/lib/globals/GlobalsModule.spec.md` |
+| Entry Point | LogsrdModule | `source/src/logsrd/LogsrdModule.spec.md` |
+
+### Source File-Level Specs
+
+| # | Module | Spec File | Role |
+|---|---|---|---|
+| 1 | EntryPoint | `Logsrd.spec.md` | Bootstrap and HTTP/WS route configuration: env parsing, uWS app, route registration |
+| 2 | Server | `Server.spec.md` | Central orchestrator: owns Persist/Replicate/Subscribe, Log registry, public API |
+| 3 | Subscribe | `Subscribe.spec.md` | WebSocket pub/sub manager for real-time log entry delivery |
+| 4 | Log | `Log.spec.md` | Central log aggregate with three-tier storage hierarchy (NewHot → OldHot → LogLog) |
+| 5 | LogConfig | `LogConfig.spec.md` | Per-log configuration with JSON Schema (AJV) validation |
+| 6 | LogId | `LogId.spec.md` | 16-byte unique log identifier with Base64URL encoding and hex directory prefix |
+| 7 | LogAddress | `LogAddress.spec.md` | Address string encoding logId + host + config hosts |
+| 8 | LogHost | `LogHost.spec.md` | Replication group: master + replicas as comma-separated string |
+| 9 | LogIndex | `LogIndex.spec.md` | In-memory entry triplet `[entryNum, offset, length]` index with config tracking |
+| 10 | GlobalLogIndex | `GlobalLogIndex.spec.md` | LogIndex with `GLOBAL_LOG_PREFIX_BYTE_LENGTH` override |
+| 11 | LogLogIndex | `LogLogIndex.spec.md` | LogIndex with `LOG_LOG_PREFIX_BYTE_LENGTH` override |
+| 12 | LogStats | `LogStats.spec.md` | Per-log I/O performance metrics (counts, bytes, timing) |
+| 13 | Access | `Access.spec.md` | Token/JWT-based authorization for read/write/admin operations |
+| 14 | AppendQueue | `AppendQueue.spec.md` | Serialised append pipeline: replicate → persist → publish |
+| 15 | Persist | `Persist.spec.md` | Dual HotLog lifecycle coordinator with periodic compaction monitor |
+| 16 | PersistedLog | `PersistedLog.spec.md` | Abstract base for on-disk persistence: file handles, IO queue, checkpoint init |
+| 17 | HotLog | `HotLog.spec.md` | Global hot log: GlobalLogEntry read/write with checkpoint interleaving |
+| 18 | LogLog | `LogLog.spec.md` | Per-log persistence file: LogLogEntry read/write tied to a single Log |
+| 19 | IOOperation | `IOOperation.spec.md` | Base I/O operation: promise, timing, global ordering via monotonic counter |
+| 20 | IOQueue | `IOQueue.spec.md` | Dual-queue structure separating read/write operations per log |
+| 21 | GlobalLogIOQueue | `GlobalLogIOQueue.spec.md` | Per-log partitioned queue aggregator with global total ordering |
+| 22 | WriteIOOperation | `WriteIOOperation.spec.md` | Write operation wrapping GlobalLogEntry/LogLogEntry |
+| 23 | ReadEntryIOOperation | `ReadEntryIOOperation.spec.md` | Read-single operation resolving entry via LogIndex |
+| 24 | ReadEntriesIOOperation | `ReadEntriesIOOperation.spec.md` | Batch read operation for multiple entry numbers |
+| 25 | ReadRangeIOOperation | `ReadRangeIOOperation.spec.md` | Stub for range-based read operations (not yet implemented) |
+| 26 | Replicate | `Replicate.spec.md` | Replication coordinator managing per-peer Host connections |
+| 27 | Host | `Host.spec.md` | Per-peer WebSocket client with reconnect, ping/pong, timeout |
+| 28 | AppendReplica | `AppendReplica.spec.md` | Single replication attempt: promise, timeout, sent-guard |
+| 29 | LogEntry (abstract) | `LogEntry.spec.md` | Abstract base: serialization contract `u8()`/`u8s()`, byte length, CRC |
+| 30 | LogEntryFactory | `LogEntryFactory.spec.md` | Top-level deserialisation dispatcher reading type byte |
+| 31 | GlobalLogEntry | `GlobalLogEntry.spec.md` | 27-byte prefix envelope with LogId, entryNum, length, CRC32 |
+| 32 | GlobalLogEntryFactory | `GlobalLogEntryFactory.spec.md` | Deserialises GlobalLogEntry from binary (full + partial) |
+| 33 | LogLogEntry | `LogLogEntry.spec.md` | 11-byte prefix envelope for per-log journal entries |
+| 34 | LogLogEntryFactory | `LogLogEntryFactory.spec.md` | Deserialises LogLogEntry from binary (full + partial) |
+| 35 | GlobalLogCheckpoint | `GlobalLogCheckpoint.spec.md` | 9-byte checkpoint with negative offset/length for reverse-scan recovery |
+| 36 | LogLogCheckpoint | `LogLogCheckpoint.spec.md` | 13-byte checkpoint with lastConfigOffset for logical-log recovery |
+| 37 | CommandLogEntry | `CommandLogEntry.spec.md` | Typed command entry with 1-byte CommandName dispatch |
+| 38 | CommandLogEntryFactory | `CommandLogEntryFactory.spec.md` | Deserialises command entries by command name byte |
+| 39 | JSONLogEntry | `JSONLogEntry.spec.md` | Entry holding a JSON string payload |
+| 40 | BinaryLogEntry | `BinaryLogEntry.spec.md` | Entry wrapping opaque Uint8Array binary data |
+| 41 | CreateLogCommand | `CreateLogCommand.spec.md` | Create-log command (extends JSONCommandType, CommandName byte 0x00) |
+| 42 | SetConfigCommand | `SetConfigCommand.spec.md` | Set-config command (extends JSONCommandType, CommandName byte 0x01) |
+| 43 | JSONCommandType | `JSONCommandType.spec.md` | Base for JSON-valued command entries |
+| 44 | U32CommandType | `U32CommandType.spec.md` | Base for u32-valued command entries |
+| 45 | StringCommandType | `StringCommandType.spec.md` | Base for string-valued command entries |
+| 46 | Globals | `Globals.spec.md` | Shared constants, enums, type registries, AbortWriteError |
+
+### Test File-Level Specs
+
+| # | Module | Test Spec | Validates |
+|---|---|---|---|
+| 1 | EntryPoint | `logsrd.test.ts` | Env parsing, Server construction, route registration, WS handlers |
+| 2 | Server | `Server.test.spec.md` | Server CRUD API, append, read, auth, master checks |
+| 3 | Subscribe | `Subscribe.test.spec.md` | Subscription lifecycle, publish serialization |
+| 4 | Log | `Log.test.spec.md` | Append pipeline, getHead, getEntries, index ops, stop |
+| 5 | LogConfig | `LogConfig.test.spec.md` | JSON Schema validation, defaults, replicationGroup |
+| 6 | LogId | `LogId.test.spec.md` | Random generation, Base64URL, hex prefix, round-trip |
+| 7 | LogAddress | `LogAddress.test.spec.md` | String format, bidirectional conversion |
+| 8 | LogHost | `LogHost.test.spec.md` | Master/replica parsing, fromString |
+| 9 | LogIndex | `LogIndex.test.spec.md` | Triplet storage, config tracking, merge, byteLength |
+| 10 | GlobalLogIndex | `GlobalLogIndex.test.spec.md` | Prefix override, inherited behavior |
+| 11 | LogLogIndex | `LogLogIndex.test.spec.md` | Prefix override, inherited behavior |
+| 12 | LogStats | `LogStats.test.spec.md` | Read/write counts, timing stats |
+| 13 | Access | `Access.test.spec.md` | Token and JWT auth modes, claim checking |
+| 14 | AppendQueue | `AppendQueue.test.spec.md` | Enqueue, pipeline processing, waitHead |
+| 15 | IOOperation | `IOOperation.test.spec.md` | Promise lifecycle, complete/error, ordering |
+| 16 | IOQueue | `IOQueue.test.spec.md` | Read/write routing, drain, getReady |
+| 17 | GlobalLogIOQueue | `GlobalLogIOQueue.test.spec.md` | Per-log routing, aggregator, global sort |
+| 18 | WriteIOOperation | `WriteIOOperation.test.spec.md` | Entry wrapping, op type |
+| 19 | ReadEntryIOOperation | `ReadEntryIOOperation.test.spec.md` | Index resolution, output fields |
+| 20 | ReadEntriesIOOperation | `ReadEntriesIOOperation.test.spec.md` | Batch read, parallel resolution |
+| 21 | ReadRangeIOOperation | `ReadRangeIOOperation.test.spec.md` | Constructor, read descriptors |
+| 22 | Replicate | `Replicate.test.spec.md` | Host creation, append dispatch |
+| 23 | Host | `Host.test.spec.md` | WebSocket lifecycle, send, monitor, reconnect |
+| 24 | AppendReplica | `AppendReplica.test.spec.md` | Promise lifecycle, timeout, sent-guard |
+| 25 | GlobalLogEntry | `GlobalLogEntry.test.spec.md` | Prefix bytes, CRC, serialization, round-trip |
+| 26 | GlobalLogEntryFactory | `GlobalLogEntryFactory.test.spec.md` | Full/partial parse, entryLength extraction |
+| 27 | LogLogEntry | `LogLogEntry.test.spec.md` | 11-byte prefix, CRC, serialization |
+| 28 | LogLogEntryFactory | `LogLogEntryFactory.test.spec.md` | Full/partial parse, entryLength extraction |
+| 29 | GlobalLogCheckpoint | `GlobalLogCheckpoint.test.spec.md` | 9-byte checkpoint serialization + CRC |
+| 30 | LogLogCheckpoint | `LogLogCheckpoint.test.spec.md` | 13-byte checkpoint with lastConfigOffset |
+| 31 | JSONLogEntry | `JSONLogEntry.test.spec.md` | String/binary construction, CRC, fromU8 |
+| 32 | BinaryLogEntry | `BinaryLogEntry.test.spec.md` | Opaque binary, CRC, round-trip |
+| 33 | CommandLogEntry | `CommandLogEntry.test.spec.md` | Command name byte, serialization |
+| 34 | CommandLogEntryFactory | `CommandLogEntryFactory.test.spec.md` | Command name dispatch, byte routing |
+| 35 | CreateLogCommand | `CreateLogCommand.test.spec.md` | CommandName byte 0x00, JSON value |
+| 36 | SetConfigCommand | `SetConfigCommand.test.spec.md` | CommandName byte 0x01, JSON value |
+| 37 | JSONCommandType | `JSONCommandType.test.spec.md` | JSON parse/serialize, round-trip |
 
 ---
 
-## 3. System Architecture
+## §2 Component Specifications
 
-The following C4 **container** diagram shows the static structure. Every node corresponds to one of the classes defined in §2.
+### 2.1 Entry Point — LogsrdModule (`source/src/logsrd/LogsrdModule.spec.md`)
+
+Application bootstrap. Reads environment variables into `ServerConfig`, creates a uWebSockets.js `TemplatedApp`, instantiates `Server`, registers HTTP routes, WebSocket handlers, admin routes, and starts the listener.
+
+| Internal Component | Role |
+|---|---|
+| `run()` | Async bootstrap — env → Server → uWS app → register routes → listen |
+| `getToken()` | Extract Bearer token from uWS HttpRequest |
+| `filterProtectedProperties()` | Strip sensitive fields from config responses |
+| `readPost()` | Buffer POST body up to MAX_ENTRY_SIZE |
+| `createLog` handler | `POST /log` |
+| `appendLog` handler | `POST /log/:logid` |
+| `getConfig` / `setConfig` handlers | `GET/PATCH /log/:logid/config` |
+| `getHead` handler | `GET /log/:logid/head` |
+| `getEntries` handler | `GET /log/:logid/entries` |
+| WS `/replicatePath` | Replication binary protocol handler |
+| WS `/client` | Client subscription text protocol handler |
+
+### 2.2 Server Module — ServerModule (`source/src/lib/server/ServerModule.spec.md`)
+
+Central orchestrator. Owns `Persist`, `Replicate`, `Subscribe` instances and a `Map<string, Log>` registry. Exposes the public API consumed by HTTP/WS handlers.
+
+| Internal Component | Role |
+|---|---|
+| `Server` | Central orchestrator — Log registry, public API, sub-module lifecycle |
+| `ServerConfig` | Configuration type — host, dataDir, pageSize, limits, peers, secret |
+| `Subscribe` | uWebSockets pub/sub manager — subscriptions, publish |
+
+### 2.3 Log Module — LogModule (`source/src/lib/log/LogModule.spec.md`)
+
+Defines the `Log` aggregate representing a single append-only log. Owns multi-tier index, append pipeline, config, access control, identity, and telemetry.
+
+| Internal Component | Role |
+|---|---|
+| `Log` | Aggregate root — three-tier storage, append/read operations |
+| `LogConfig` | Per-log config with JSON Schema validation |
+| `LogId` | 16-byte unique identifier with Base64URL encoding |
+| `LogAddress` | Address string encoding logId + host + config hosts |
+| `LogHost` | Master + replicas host specification |
+| `LogIndex` | In-memory `[entryNum, offset, length]` triplet index |
+| `GlobalLogIndex` | LogIndex with global prefix byte length |
+| `LogLogIndex` | LogIndex with log-log prefix byte length |
+| `LogStats` | Per-log IO performance metrics |
+| `Access` | Token/JWT-based authorization |
+| `AppendQueue` | Serialised append pipeline (replicate → persist → publish) |
+
+### 2.4 Entry Module — EntryModule (`source/src/lib/entry/EntryModule.spec.md`)
+
+Complete entry type hierarchy. Leaf module — zero sub-module dependencies (only imports globals).
+
+| Internal Component | Role |
+|---|---|
+| `LogEntry` (abstract) | Base entry class — serialization + checksum interface |
+| `LogEntryFactory` | Top-level dispatcher — reads type byte, routes to concrete factory |
+| `GlobalLogEntry` | 27-byte prefix envelope (logId, entryNum, CRC) |
+| `GlobalLogEntryFactory` | Parses GlobalLogEntry from binary |
+| `LogLogEntry` | 11-byte prefix envelope (entryNum, CRC) |
+| `LogLogEntryFactory` | Parses LogLogEntry from binary |
+| `GlobalLogCheckpoint` | 9-byte hot log checkpoint for reverse-scan recovery |
+| `LogLogCheckpoint` | 13-byte log-log checkpoint with lastConfigOffset |
+| `CommandLogEntry` | Typed command — 1-byte command name + value |
+| `CommandLogEntryFactory` | Parses command entries — dispatches by command name |
+| `JSONLogEntry` | Entry with JSON string payload |
+| `BinaryLogEntry` | Entry with opaque binary payload |
+| `CreateLogCommand` | CREATE_LOG command (CommandName 0x00, JSON value) |
+| `SetConfigCommand` | SET_CONFIG command (CommandName 0x01, JSON value) |
+| `JSONCommandType` | JSON-valued command base |
+| `U32CommandType` | u32-valued command base |
+| `StringCommandType` | String-valued command base |
+
+### 2.5 Persistence Module — PersistModule (`source/src/lib/persist/PersistModule.spec.md`)
+
+Manages all on-disk storage. Dual HotLog (new + old) with periodic rotation. Abstract `PersistedLog` base with per-log `LogLog` concrete.
+
+| Internal Component | Role |
+|---|---|
+| `Persist` | Top-level coordinator — owns HotLogs, drives rotation cycle |
+| `PersistedLog` | Abstract base — file handle pool, IO queue, checkpoint init |
+| `HotLog` | Global hot log — GlobalLogEntry read/write with checkpoint interleaving |
+| `LogLog` | Per-log persistent file — LogLogEntry read/write |
+
+### 2.6 IO Module — IOModule (`source/src/lib/persist/io/IOModule.spec.md`)
+
+Async operation queue infrastructure for all file I/O. Base `IOOperation` carries promise, timing, global ordering. `GlobalLogIOQueue` aggregates per-log queues.
+
+| Internal Component | Role |
+|---|---|
+| `IOOperation` | Base class — op type, promise, timing, global order |
+| `IOQueue` | Per-log queue — separate read/write lists, drain |
+| `GlobalLogIOQueue` | Top-level — per-log sub-queues, global ordering, lifecycle |
+| `WriteIOOperation` | Write op wrapping GlobalLogEntry/LogLogEntry |
+| `ReadEntryIOOperation` | Read-single op with LogIndex + entryNum |
+| `ReadEntriesIOOperation` | Read-multiple op with LogIndex + entryNums |
+| `ReadRangeIOOperation` | Read-range stub (not yet implemented) |
+
+### 2.7 Replication Module — ReplicateModule (`source/src/lib/replicate/ReplicateModule.spec.md`)
+
+WebSocket-based replication protocol between logsrd peers. Per-peer `Host` connections with auto-reconnect.
+
+| Internal Component | Role |
+|---|---|
+| `Replicate` | Top-level — Host map, append dispatch |
+| `Host` | Per-peer WebSocket client — connect, monitor, send |
+| `AppendReplica` | Single replication attempt — promise + timeout |
+
+### 2.8 Globals & Constants — GlobalsModule (`source/src/lib/globals/GlobalsModule.spec.md`)
+
+Shared constants, enums, type registries, and errors. Leaf module — zero dependencies.
+
+| Internal Component | Role |
+|---|---|
+| `DEFAULT_HOT_LOG_FILE_NAME` | Default global hot log filename |
+| `MAX_ENTRY_SIZE` | Max POST body size (32KB) |
+| `MAX_LOG_SIZE` | Max per-log file size (16MB) |
+| `MAX_RESPONSE_ENTRIES` | Max entries per response (100) |
+| `GLOBAL_LOG_CHECKPOINT_INTERVAL` | Hot log checkpoint interval (128KB) |
+| `LOG_LOG_CHECKPOINT_INTERVAL` | Log-log checkpoint interval (128KB) |
+| `GLOBAL_LOG_PREFIX_BYTE_LENGTH` | GlobalLogEntry prefix size (27) |
+| `LOG_LOG_PREFIX_BYTE_LENGTH` | LogLogEntry prefix size (11) |
+| `CommandName` enum | CREATE_LOG (0x00), SET_CONFIG (0x01) |
+| `EntryType` enum | GLOBAL_LOG, LOG_LOG, CHECKPOINT, COMMAND, BINARY, JSON |
+| `IOOperationType` enum | READ_ENTRY, READ_ENTRIES, READ_RANGE, WRITE |
+| `COMMAND_CLASS` / `ENTRY_CLASS` | Byte → constructor registries |
+| `AbortWriteError` | Error for aborted writes |
+
+---
+
+## §3 System Architecture
 
 ```mermaid
 graph TB
-    Client["Client\n(External Actor)"]
-    ReplicaNode["Replica Server\n(External Actor)"]
-
-    subgraph LogsR_Server["LogsR Server"]
-        Server_c["Server"]
-
-        subgraph LogManagement["Log Management"]
-            Log_c["Log"]
-            AppendQueue_c["AppendQueue"]
-            Access_c["Access"]
-            LogConfig_c["LogConfig"]
-            LogId_c["LogId"]
-            LogIndex_c["LogIndex / GlobalLogIndex / LogLogIndex"]
-            LogStats_c["LogStats"]
-        end
-
-        subgraph PersistenceLayer["Persistence"]
-            Persist_c["Persist"]
-            HotLog_c["HotLog"]
-            LogLog_c["LogLog"]
-            PersistedLog_c["PersistedLog"]
-        end
-
-        subgraph IOSubsystem["IO Subsystem"]
-            GlobalLogIOQueue_c["GlobalLogIOQueue"]
-            IOQueue_c["IOQueue"]
-            IOOperation_c["IOOperation"]
-        end
-
-        subgraph Networking["Replication & Subscription"]
-            Replicate_c["Replicate"]
-            Host_c["Host"]
-            AppendReplica_c["AppendReplica"]
-            Subscribe_c["Subscribe"]
-        end
-
-        subgraph Entries["Entry Types"]
-            LogEntry_c["LogEntry"]
-            GlobalLogEntry_c["GlobalLogEntry"]
-            LogLogEntry_c["LogLogEntry"]
-            CommandLogEntry_c["CommandLogEntry"]
-            JSONLogEntry_c["JSONLogEntry"]
-            BinaryLogEntry_c["BinaryLogEntry"]
-            Checkpoint_c["GlobalLogCheckpoint / LogLogCheckpoint"]
-        end
-
-        subgraph Factories["Factories"]
-            LogEntryFactory_c["LogEntryFactory"]
-            GlobalLogEntryFactory_c["GlobalLogEntryFactory"]
-            LogLogEntryFactory_c["LogLogEntryFactory"]
-        end
+    subgraph EntryPoint["Entry Point (LogsrdModule)"]
+        run["run() bootstrap"]
+        HTTP["HTTP Routes\nPOST/GET/PATCH"]
+        WS["WebSocket Routes\n/replicatePath, /client"]
+        Admin["Admin Routes\nmove/empty hot log"]
     end
 
-    Client -->|"HTTP / WS"| Server_c
-    ReplicaNode -->|"WS Replication"| Host_c
+    subgraph ServerModule["Server Module"]
+        S["Server\nowner + dispatcher"]
+        Sub["Subscribe\npub/sub manager"]
+        SC["ServerConfig"]
+    end
 
-    Server_c --> Log_c
-    Server_c --> Persist_c
-    Server_c --> Replicate_c
-    Server_c --> Subscribe_c
+    subgraph LogModule["Log Module"]
+        L["Log\naggregate root"]
+        AQ["AppendQueue\npipeline"]
+        AC["Access\nauth layer"]
+        LI1["GlobalLogIndex\nnew hot"]
+        LI2["GlobalLogIndex\nold hot"]
+        LI3["LogLogIndex"]
+        LC["LogConfig"]
+    end
 
-    Log_c --> AppendQueue_c
-    Log_c --> Access_c
-    Log_c --> LogConfig_c
-    Log_c --> LogId_c
-    Log_c --> LogIndex_c
-    Log_c --> LogStats_c
-    Log_c --> HotLog_c
-    Log_c --> LogLog_c
+    subgraph EntryModule["Entry Module"]
+        GLE["GlobalLogEntry"]
+        LLE["LogLogEntry"]
+        CLE["CommandLogEntry"]
+        JLE["JSONLogEntry"]
+        BLE["BinaryLogEntry"]
+        CHK["Checkpoints"]
+        FACS["Factories (×4)"]
+        CMD["Commands (×5)"]
+    end
 
-    Persist_c --> HotLog_c
-    HotLog_c --> PersistedLog_c
-    LogLog_c --> PersistedLog_c
+    subgraph PersistModule["Persistence Module"]
+        PER["Persist\ncoordinator"]
+        HL_N["HotLog (new)\nactive writes"]
+        HL_O["HotLog (old)\nintermediate buffer"]
+        LL["LogLog (N)\nper-log storage"]
+        PL["PersistedLog\nabstract base"]
+    end
 
-    PersistedLog_c --> GlobalLogIOQueue_c
-    PersistedLog_c --> IOQueue_c
-    GlobalLogIOQueue_c --> IOQueue_c
-    IOQueue_c --> IOOperation_c
+    subgraph IOModule["IO Module"]
+        IOQ["IOQueue\nper-log"]
+        GLIQ["GlobalLogIOQueue\naggregator"]
+        IOOp["IOOperation\nbase"]
+        WIO["WriteIOOp"]
+        RIO["ReadIOOp"]
+    end
 
-    Replicate_c --> Host_c
-    Host_c --> AppendReplica_c
-    Host_c -->|"WS Send"| ReplicaNode
+    subgraph ReplicateModule["Replication Module"]
+        REP["Replicate\ncoordinator"]
+        H1["Host\npeer 1"]
+        H2["Host\npeer N"]
+        AR["AppendReplica"]
+    end
 
-    GlobalLogEntry_c --> LogEntry_c
-    LogLogEntry_c --> LogEntry_c
-    CommandLogEntry_c --> LogEntry_c
-    JSONLogEntry_c --> LogEntry_c
-    BinaryLogEntry_c --> LogEntry_c
+    subgraph GlobalsModule["Globals & Constants"]
+        GLOB["Constants, Enums,\nRegistries, Errors"]
+    end
 
-    GlobalLogEntryFactory_c --> GlobalLogEntry_c
-    LogLogEntryFactory_c --> LogLogEntry_c
-    LogEntryFactory_c --> LogEntry_c
+    %% Dependency edges
+    EntryPoint -->|"creates"| ServerModule
+    EntryPoint -->|"configures"| run
+    run --> S
 
-    HotLog_c --> GlobalLogEntryFactory_c
-    LogLog_c --> LogLogEntryFactory_c
-    HotLog_c --> Checkpoint_c
-    LogLog_c --> Checkpoint_c
+    ServerModule -->|"owns"| LogModule
+    ServerModule -->|"owns"| PersistModule
+    ServerModule -->|"owns"| ReplicateModule
+    ServerModule -->|"owns"| Sub
+
+    LogModule -->|"uses"| EntryModule
+    LogModule -->|"uses"| GlobalsModule
+
+    PersistModule -->|"uses"| IOModule
+    PersistModule -->|"persists"| LogModule
+    PersistModule -->|"serializes"| EntryModule
+
+    ReplicateModule -->|"transmits"| EntryModule
+
+    IOModule -->|"imports enums"| GlobalsModule
 ```
 
 ---
 
-## 4. Detailed Data Flow
-
-The sequence diagram below models the **append** operation, referencing methods from §2.
+## §4 Detailed Data Flow
 
 ```mermaid
 sequenceDiagram
-    actor Client
-    participant Server
-    participant Log
-    participant AppendQueue
-    participant Replicate
-    participant Host
-    participant HotLog
-    participant Subscribe
+    participant Client as HTTP Client
+    participant EP as logsrd.ts (Entry Point)
+    participant S as Server
+    participant L as Log
+    participant AQ as AppendQueue
+    participant Rep as Replicate
+    participant PER as Persist
+    participant HL as HotLog (new)
+    participant Sub as Subscribe
+    participant Peer as Remote Peer
 
-    Client->>Server: POST /log/:logid (data, token)
-    Server->>Log: getLog(logId)
-    Server->>Log: getConfig()
-    Log-->>Server: LogConfig
-    Server->>Access: allowWrite(token)
-    Access-->>Server: true
-    Server->>Log: append(entry, config)
+    Client->>EP: POST /log/:logid {data}
+    activate EP
 
-    Log->>Log: lastEntryNum() + 1
-    Log->>AppendQueue: enqueue(GlobalLogEntry)
-    AppendQueue->>AppendQueue: process()
+    EP->>EP: readPost() → buffer body
+    EP->>EP: getToken() → extract Bearer
+    EP->>S: appendLog(logId, token, data, lastEntryNum?)
 
-    alt appendInProgress === null
-        AppendQueue->>Log: appendInProgress = this
-        AppendQueue->>Log: appendQueue = new AppendQueue
+    activate S
+    S->>S: getLog(logId) → lazy factory / cache
+    S->>S: Access.allowed(WRITE)
+    S->>S: create GlobalLogEntry wrapper
+    S->>L: append(entry)
 
-        loop for each entry in queue
-            AppendQueue->>Replicate: appendReplica(host, entry)
-            Replicate->>Host: appendReplica(entry)
-            Host->>Host: send(AppendReplica)
-            Host-->>Replicate: ok / err
+    activate L
+    L->>L: add to GlobalLogIndex (new hot)
+    L->>AQ: enqueue(entry, config?)
 
-            AppendQueue->>HotLog: enqueueOp(WriteIOOperation)
-            HotLog->>HotLog: processWriteOps()
-            HotLog->>HotLog: writev(u8s) + datasync()
-            HotLog->>Log: addNewHotLogEntry(...)
-            HotLog->>IOOperation: complete(op)
+    activate AQ
+    AQ->>AQ: process()
 
-            AppendQueue->>LogStats: addOp(op)
-            AppendQueue->>Subscribe: publish(entry)
-            Subscribe->>Server: uws.publish(logId, data)
-        end
-
-        AppendQueue->>AppendQueue: complete()
+    par Synchronous Replication
+        AQ->>Rep: appendReplica(entry)
+        activate Rep
+        Rep->>Peer: WS binary send
+        Peer-->>Rep: ack
+        deactivate Rep
+    and Persistence
+        AQ->>PER: enqueueOp(writeOp)
+        activate PER
+        PER->>HL: processWriteOps()
+        HL->>HL: write + checkpoint interleave
+        HL-->>PER: written
+        deactivate PER
+    and Pub/Sub
+        AQ->>Sub: publish(entry)
+        activate Sub
+        Sub->>Sub: serialize → uWS publish
+        deactivate Sub
     end
 
-    AppendQueue-->>Client: { entryNum, crc }
+    AQ-->>L: promise resolves
+    deactivate AQ
+
+    L-->>S: GlobalLogEntry
+    deactivate L
+
+    S-->>EP: {allowed, entry}
+    deactivate S
+
+    EP-->>Client: HTTP 200 + JSON
+    deactivate EP
 ```
 
 ---
 
-## 5. Testing Requirements
+## §5 Visualization
 
-### 5.1 Unit Tests
+```html
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: monospace; background: #1e1e2e; color: #cdd6f4; }
+  #vis { width: 1060px; height: 640px; position: relative; margin: 0 auto; }
+  .controls { display: flex; gap: 8px; padding: 8px 16px; background: #181825; align-items: center; border-bottom: 1px solid #313244; }
+  .controls button { background: #45475a; color: #cdd6f4; border: none; padding: 6px 14px; cursor: pointer; border-radius: 4px; font-size: 13px; }
+  .controls button:hover { background: #585b70; }
+  #kf-current, #kf-total { color: #a6adc8; font-size: 12px; min-width: 20px; text-align: center; }
+  #frame-label { color: #89b4fa; font-size: 14px; margin-left: auto; padding-right: 8px; }
+  .node { position: absolute; border: 2px solid #89b4fa; border-radius: 8px; padding: 10px 14px;
+          background: #313244; font-size: 12px; text-align: center; transition: all 0.35s ease;
+          cursor: default; z-index: 2; min-width: 60px; }
+  .node.active { border-color: #a6e3a1; background: #45475a; box-shadow: 0 0 16px rgba(166,227,161,0.5); }
+  .node .badge { font-size: 9px; color: #6c7086; margin-top: 3px; }
+  .edge { position: absolute; height: 3px; background: #585b70; transform-origin: 0 0; z-index: 1; border-radius: 2px; }
+  .edge.active { background: #a6e3a1; box-shadow: 0 0 8px #a6e3a1; }
+</style>
+</head>
+<body>
+<div class="controls">
+  <button id="play-pause" data-testid="play-pause">⏸</button>
+  <span id="kf-current">0</span><span>/</span><span id="kf-total">7</span>
+  <input type="range" id="seek" min="0" max="7" value="0" style="flex:1; accent-color:#89b4fa;">
+  <span id="frame-label">Client sends POST /log/:logid</span>
+</div>
+<div id="vis"></div>
+<script>
+(function(){
+  var ANIMATION_DURATION_MS = 14000;
 
-| Class                | Method                                                             | Test Case                                                         | Verification                                                    |
-| -------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------- | --------------------------------------------------------------- |
-| `LogId`              | `newRandom()`                                                      | Generates 16 random bytes                                         | `byteLength() === 16`                                           |
-| `LogId`              | `base64()`                                                         | Encode & decode round‑trip                                        | `newFromBase64(base64()).base64() === base64()`                 |
-| `LogId`              | `logDirPrefix()`                                                   | Derive directory prefix                                           | Format `XX/YY` from first two bytes                             |
-| `LogHost`            | `fromString` / `toString`                                          | `"master,replica1,replica2"`                                      | Correct master and replica array                                |
-| `LogAddress`         | `fromString`                                                       | Full address with config hosts                                    | Sections correctly parsed                                       |
-| `LogConfig`          | `newFromJSON`                                                      | Minimal valid config, token auth                                  | Defaults filled correctly; no duplicate token generation        |
-| `LogConfig`          | `newFromJSON`                                                      | JWT auth – no tokens                                              | Secret generated, no token conflict                             |
-| `LogConfig`          | `newFromJSON`                                                      | Invalid access/token combos                                       | Throws `InvalidLogConfigError`                                  |
-| `LogIndex`           | `addEntry`                                                         | Sequential entries                                                | `entryCount()` correct; entry lookup returns correct triple     |
-| `LogIndex`           | `appendIndex`                                                      | Merge two indexes                                                 | Combined order, latest config wins                              |
-| `GlobalLogIndex`     | `byteLength()`                                                     | Uses `GLOBAL_LOG_PREFIX_BYTE_LENGTH`                              | Sum matches expected                                            |
-| `LogLogIndex`        | `byteLength()`                                                     | Uses `LOG_LOG_PREFIX_BYTE_LENGTH`                                 | Sum matches expected                                            |
-| `LogStats`           | `addOp`                                                            | Read & write operations                                           | Counts and averages update correctly                            |
-| `Access`             | `allowed`                                                          | Various token / JWT scenarios (public, scoped, super, JWT claims) | Permissions match the rules documented in `allowed()`           |
-| `AppendQueue`        | `enqueue` + `waitHead`                                             | Single entry                                                      | Resolves with correct `GlobalLogEntry`                          |
-| `AppendQueue`        | `enqueue` + `waitConfig`                                           | Entry with config                                                 | Resolves with the config‑carrying entry                         |
-| `Log`                | `create`                                                           | New log                                                           | Creates `CreateLogCommand`, sets config                         |
-| `Log`                | `append`                                                           | Concurrent `lastEntryNum` tracking                                | Entry numbers increase monotonically                            |
-| `Log`                | `setConfig`                                                        | Concurrent protection & config number check                       | Rejects if config update already in progress or number mismatch |
-| `Log`                | `getHead`                                                          | Pending appends vs stored index                                   | Returns correct latest entry                                    |
-| `Log`                | `getEntries` / `getEntryNums`                                      | Entries split across hot/cold logs                                | Correct assembly in requested order                             |
-| `HotLog`             | `processWriteOps`                                                  | Entry crossing checkpoint boundary                                | Checkpoint inserted; entry reconstructed correctly              |
-| `LogLog`             | `processWriteOps`                                                  | Same as HotLog, plus `lastConfigOffset`                           | Checkpoint contains correct config offset                       |
-| `PersistedLog`       | `init`                                                             | Rebuild indexes from checkpoints                                  | All entries recovered; `byteLength` set                         |
-| `Persist`            | `monitor`                                                          | Triggers `emptyOldHotLog` or `moveNewToOldHotLog`                 | Invoked when conditions met                                     |
-| `Server`             | `createLog` / `appendLog` / `getEntries` / `setConfig` / `getHead` | Standard API calls                                                | Correct HTTP‑like behaviour, error codes                        |
-| `Replicate` / `Host` | `appendReplica`                                                    | Successful send & ack                                             | Promise resolves; timeout triggers error                        |
-| `Subscribe`          | `publish`                                                          | WebSocket push                                                    | Message format `{entryNum, entry}`                              |
-| All IO operations    | `complete` / `completeWithError`                                   | Promise resolution / rejection                                    | Timestamps set, callbacks invoked                               |
+  var ANIMATION_KEYFRAMES = [
+    { label: "Client sends POST /log/:logid", active: ["Client","EP"], edges: ["Client-EP"] },
+    { label: "Entry Point reads body + token", active: ["EP"], edges: [] },
+    { label: "Server.appendLog() → Log.append()", active: ["EP","S","L"], edges: ["EP-S","S-L"] },
+    { label: "AppendQueue.process() starts pipeline", active: ["L","AQ"], edges: ["L-AQ"] },
+    { label: "Replicate to all peers", active: ["AQ","Rep","Peer"], edges: ["AQ-Rep","Rep-Peer"] },
+    { label: "Persist to HotLog (new)", active: ["AQ","PER","HL"], edges: ["AQ-PER","PER-HL"] },
+    { label: "Publish to subscribers", active: ["AQ","Sub"], edges: ["AQ-Sub"] },
+    { label: "Promise resolves → HTTP 200 to client", active: ["S","Client"], edges: ["S-Client"] },
+  ];
 
-### 5.2 End‑to‑End Tests
+  var ANIMATION_VERIFICATION = [
+    { idx: 0, nodes: ["Client","EP"], edges: ["Client-EP"], label: "Client sends POST /log/:logid" },
+    { idx: 1, nodes: ["EP"], edges: [], label: "Entry Point reads body + token" },
+    { idx: 2, nodes: ["EP","S","L"], edges: ["EP-S","S-L"], label: "Server.appendLog() → Log.append()" },
+    { idx: 3, nodes: ["L","AQ"], edges: ["L-AQ"], label: "AppendQueue.process() starts pipeline" },
+    { idx: 4, nodes: ["AQ","Rep","Peer"], edges: ["AQ-Rep","Rep-Peer"], label: "Replicate to all peers" },
+    { idx: 5, nodes: ["AQ","PER","HL"], edges: ["AQ-PER","PER-HL"], label: "Persist to HotLog (new)" },
+    { idx: 6, nodes: ["AQ","Sub"], edges: ["AQ-Sub"], label: "Publish to subscribers" },
+    { idx: 7, nodes: ["S","Client"], edges: ["S-Client"], label: "Promise resolves → HTTP 200 to client" },
+  ];
 
-**Environment Setup**
+  var nodePositions = {
+    Client: [40, 280], EP: [220, 140], S: [420, 140],
+    L: [600, 80], AQ: [600, 200],
+    Rep: [420, 360], Peer: [600, 440],
+    PER: [800, 80], HL: [800, 200],
+    Sub: [800, 360]
+  };
 
-- Three LogsR instances on different ports, each with isolated data directories.
-- Shared secret for inter‑server replication.
-- Test client using `node-fetch` and `ws`.
+  var vis = document.getElementById('vis');
+  var nodes = {};
 
-| ID     | Test                      | Steps                                                                                                 | Expected Outcome                                                                              |
-| ------ | ------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| E2E‑1  | Basic create & append     | Create log → append JSON → get head → get entries                                                     | All requests succeed; data matches                                                            |
-| E2E‑2  | Access control – token    | Create private log with scoped tokens; attempt operations with invalid/valid tokens                   | 403 for unauthorised; correct scoping                                                         |
-| E2E‑3  | Access control – JWT      | Create JWT log; use HS256 tokens with various `allow` claims                                          | Permissions enforced                                                                          |
-| E2E‑4  | Optimistic concurrency    | Append with `lastEntryNum`; repeat with stale number                                                  | Second returns 409                                                                            |
-| E2E‑5  | Stop log                  | Set `stopped:true`; try append                                                                        | Append returns error, reads still work                                                        |
-| E2E‑6  | Replication               | Create log on master with replicas; append; verify entry exists on replica (via admin or direct read) | All replicas receive the entry                                                                |
-| E2E‑7  | Crash recovery            | Append 20 entries, kill server, restart                                                               | All entries readable; new append picks up correct `entryNum`                                  |
-| E2E‑8  | Concurrent stress         | N clients each appending M deterministic entries with retries                                         | Total entries = N×M, no duplicates, no gaps                                                   |
-| E2E‑9  | Mixed read/write load     | Sustained mix of appends and reads on two logs                                                        | No errors; data consistency                                                                   |
-| E2E‑10 | Hot log rotation          | Lower `globalIndexCountLimit`, force rotation via admin route, append more, read back                 | All entries preserved across rotations                                                        |
-| E2E‑11 | WebSocket subscription    | Subscribe to log via WS, append REST, check WS message                                                | Subscriber receives `{entryNum, entry}`                                                       |
-| E2E‑12 | Replica failure tolerance | Stop a replica, append on master, restart replica, append again                                       | Desired: log remains operational; current behaviour depends on error handling (to be refined) |
+  Object.keys(nodePositions).forEach(function(id) {
+    var pos = nodePositions[id];
+    var el = document.createElement('div');
+    el.className = 'node';
+    el.id = 'n-' + id;
+    el.style.left = pos[0] + 'px';
+    el.style.top = pos[1] + 'px';
+    el.innerHTML = '<strong>' + id + '</strong><div class="badge">module</div>';
+    vis.appendChild(el);
+    nodes[id] = el;
+  });
 
-**Post‑test validation**
+  var edgeDefs = [
+    ['Client','EP'], ['EP','S'], ['S','L'],
+    ['L','AQ'], ['AQ','Rep'], ['Rep','Peer'],
+    ['AQ','PER'], ['PER','HL'], ['AQ','Sub'],
+    ['S','Client']
+  ];
 
-- Checkpoint files are valid and all CRCs match.
-- No open file handles left behind.
-- LogLog files contain only flushed entries, no duplicates.
+  var edges = [];
+  edgeDefs.forEach(function(pair) {
+    var from = pair[0], to = pair[1];
+    var fx = nodePositions[from][0] + 40;
+    var fy = nodePositions[from][1] + 22;
+    var tx = nodePositions[to][0];
+    var ty = nodePositions[to][1] + 22;
+    var dx = tx - fx, dy = ty - fy;
+    var len = Math.sqrt(dx*dx + dy*dy);
+    var el = document.createElement('div');
+    el.className = 'edge';
+    el.id = 'e-' + from + '-' + to;
+    el.style.left = fx + 'px';
+    el.style.top = fy + 'px';
+    el.style.width = len + 'px';
+    el.style.transform = 'rotate(' + (Math.atan2(dy, dx) * 180 / Math.PI) + 'deg)';
+    vis.appendChild(el);
+    edges.push({ el: el, from: from, to: to });
+  });
 
----
+  var currentKf = 0, playing = true, intervalId;
 
-## 6. CLI Entry Point
+  function jumpToKeyframe(idx) {
+    currentKf = Math.max(0, Math.min(idx, ANIMATION_KEYFRAMES.length - 1));
+    var kf = ANIMATION_KEYFRAMES[currentKf];
+    Object.keys(nodes).forEach(function(id) {
+      nodes[id].classList.toggle('active', kf.active.indexOf(id) !== -1);
+    });
+    edges.forEach(function(e) {
+      e.el.classList.toggle('active', kf.edges.indexOf(e.from + '-' + e.to) !== -1);
+    });
+    document.getElementById('frame-label').textContent = kf.label;
+    document.getElementById('kf-current').textContent = currentKf;
+    document.getElementById('seek').value = currentKf;
+  }
 
-The server is started by running the built `index.js` (or `server.js`) with environment variable configuration.
+  function resetAnimation() { jumpToKeyframe(0); }
 
-```bash
-DATA_DIR=./data \
-HOST=127.0.0.1 \
-HOSTS="127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002" \
-PORT=7000 \
-REPLICATE_TIMEOUT=3000 \
-SERVER_SECRET=my-shared-secret \
-HOST_MONITOR_INTERVAL=10000 \
-node dist/server.js
+  function getAnimationState() {
+    return { currentKf: currentKf, playing: playing, total: ANIMATION_KEYFRAMES.length };
+  }
+
+  function togglePlay() {
+    playing = !playing;
+    document.getElementById('play-pause').textContent = playing ? '⏸' : '▶';
+    if (playing) {
+      intervalId = setInterval(function() {
+        jumpToKeyframe((currentKf + 1) % ANIMATION_KEYFRAMES.length);
+      }, ANIMATION_DURATION_MS / ANIMATION_KEYFRAMES.length);
+    } else {
+      clearInterval(intervalId);
+    }
+  }
+
+  document.getElementById('play-pause').addEventListener('click', togglePlay);
+  document.getElementById('seek').addEventListener('input', function() {
+    jumpToKeyframe(parseInt(this.value));
+  });
+
+  document.getElementById('kf-total').textContent = ANIMATION_KEYFRAMES.length - 1;
+  jumpToKeyframe(0);
+  intervalId = setInterval(function() {
+    jumpToKeyframe((currentKf + 1) % ANIMATION_KEYFRAMES.length);
+  }, ANIMATION_DURATION_MS / ANIMATION_KEYFRAMES.length);
+
+  window.ANIMATION_DURATION_MS = ANIMATION_DURATION_MS;
+  window.ANIMATION_KEYFRAMES = ANIMATION_KEYFRAMES;
+  window.ANIMATION_VERIFICATION = ANIMATION_VERIFICATION;
+  window.jumpToKeyframe = jumpToKeyframe;
+  window.resetAnimation = resetAnimation;
+  window.getAnimationState = getAnimationState;
+})();
+</script>
+</body>
+</html>
 ```
 
-**Environment variables** (all have defaults):
+---
 
-| Variable                | Default     | Description                                                          |
-| ----------------------- | ----------- | -------------------------------------------------------------------- |
-| `DATA_DIR`              | `./data`    | Base data directory                                                  |
-| `HOST`                  | `127.0.0.1` | This server’s hostname (will be combined with `PORT` as `host:port`) |
-| `HOSTS`                 | `""`        | Space‑separated list of all cluster hosts (`host:port`)              |
-| `PORT`                  | `7000`      | Listening port                                                       |
-| `REPLICATE_PATH`        | `replicate` | WebSocket path for replication                                       |
-| `REPLICATE_TIMEOUT`     | `3000`      | Replication handshake timeout (ms)                                   |
-| `SERVER_SECRET`         | `secret`    | Shared secret for inter‑server auth                                  |
-| `HOST_MONITOR_INTERVAL` | `10000`     | Health‑check interval (ms)                                           |
+## §6 Testing Requirements
 
-The server creates a `uWS.App()` and registers all REST and WebSocket routes before calling `listen()`.
+### 6.1 Integration / E2E Test Scenarios
+
+| Scenario | Steps | Expected |
+|---|---|---|
+| **Create & Append Log** | `POST /log` → get logId → `POST /log/:logid` with JSON body | HTTP 200, entry returned with valid CRC |
+| **Synchronous Replication** | Start 2-node cluster (HOSTS comma-separated). `POST /log` on node A → `POST /log/:logid/head` on node B | Node B returns same GlobalLogEntry via replication |
+| **Get Entries** | Append 5 entries → `GET /log/:logid/entries?offset=0&limit=3` | 3 entries returned, correct ordering |
+| **Get Entry By Numbers** | Append 5 entries → `GET /log/:logid/entries?entryNums=1,3` | Entries 1 and 3 returned |
+| **Config Round-Trip** | Create log → `GET /log/:logid/config` → `PATCH /log/:logid/config` with new config → `GET` again | New config returned |
+| **Auth Token** | Create log with writeToken → `POST /log/:logid` with wrong token | HTTP 403 |
+| **Auth JWT** | Create log with HS256 JWT secret → `POST /log/:logid` with signed JWT `allow=write` | HTTP 200 |
+| **Hot Log Rotation** | Append until newHotLog exceeds `globalIndexCountLimit` → admin `GET /admin/move-new-to-old-hot-log` | Entries moved to old hot log, index transferred |
+| **LogLog Compaction** | Admin `GET /admin/empty-old-hot-log` | Old hot log drained to LogLog, file cycled |
+| **WebSocket Subscribe** | Connect to `/client` WS, subscribe to logId → append entry → WS receives | Text message with serialized entry |
+| **WebSocket Replication** | Connect to `/replicatePath` WS → send binary GlobalLogEntry → receive ack | Entry persisted, no error |
+| **Last Entry Number Guard** | `POST /log/:logid` with `lastEntryNum=999` (wrong) | HTTP 409 Conflict |
+| **Read-Only Mode** | Create log with no writeToken → `POST /log/:logid` | HTTP 403 |
+| **Recovery After Restart** | Append entries → restart server → `GET /log/:logid/head` on same log | Head entry matches pre-restart value |
+
+### 6.2 Unit Tests
+
+Unit tests are delegated to the module-level spec files:
+
+| Module | Test file | Coverage |
+|---|---|---|
+| Entry Module | `Source-Test Cross-References` in `EntryModule.spec.md` | 14 test files, 28+ entry type & factory method variants |
+| Log Module | `Source-Test Cross-References` in `LogModule.spec.md` | 11 test files, 30+ Log/Index/Config/Access/AppendQueue variants |
+| Persist Module | `Source-Test Cross-References` in `PersistModule.spec.md` | Persist, PersistedLog, HotLog, LogLog test files |
+| IO Module | `Source-Test Cross-References` in `IOModule.spec.md` | 7 operation/queue test files |
+| Replicate Module | `Source-Test Cross-References` in `ReplicateModule.spec.md` | 3 test files (Replicate, Host, AppendReplica) |
+| Server Module | `Source-Test Cross-References` in `ServerModule.spec.md` | Server + Subscribe test files |
+| Globals Module | `Source-Test Cross-References` in `GlobalsModule.spec.md` | Constants, enums, registries validation |
+| Entry Point | `Source-Test Cross-References` in `LogsrdModule.spec.md` | Env parsing, route registration, WS handlers |
 
 ---
 
-## 7. Known Issues
+## §7 CLI Entry Point
 
-The following issues have been identified during a compliance review of the implementation against this specification.
+### 7.1 Environment Variables
 
-### 7.1 LogIndex.entry() Sequential Assumption
+| Variable | Default | Description |
+|---|---|---|
+| `DATA_DIR` | `./data` | Root directory for log storage |
+| `PORT` | `1976` | HTTP/WS server listen port |
+| `HOSTS` | (empty) | Comma-separated peer host:port for replication |
+| `ADMIN_TOKEN` | auto-generated | Bearer token for admin operations |
+| `SECRET` | auto-generated | Shared secret for replication WebSocket auth |
+| `HOT_LOG_FILE_NAME` | `DEFAULT_HOT_LOG_FILE_NAME` | Global hot log filename |
+| `GLOBAL_INDEX_COUNT_LIMIT` | calculated | Max entries before hot log rotation |
+| `MAX_ENTRY_SIZE` | `32768` (32KB) | Maximum POST body size |
+| `MAX_LOG_SIZE` | `16777216` (16MB) | Maximum per-log file size |
+| `MAX_RESPONSE_ENTRIES` | `100` | Maximum entries per GET response |
+| `CHECKPOINT_INTERVAL` | `131072` (128KB) | Checkpoint byte interval |
 
-The `LogIndex.entry()` method uses a direct indexing formula `(entryNum - en[0]) * 3` to locate entries in the flat `en` array. In contrast, `hasEntry()` uses a linear scan. If gaps exist in the entry number sequence (e.g., after partial crash recovery or a replayed entry range), `entry()` would silently return incorrect triples. The method should either use a linear scan (like `hasEntry()`) or validate that entries are contiguous before applying the formula.
+### 7.2 Startup Flow
 
-### 7.2 Import Mismatch in LogStats (`ReadIOOperation`)
+```
+run()
+  │
+  ├─ Read environment → ServerConfig
+  ├─ Create uWebSockets.js TemplatedApp
+  ├─ new Server(config, uWS.App())
+  │    ├─ new Persist(config) → init()
+  │    ├─ new Replicate(config)
+  │    └─ new Subscribe(uWS.App())
+  │
+  ├─ Register HTTP routes on uWS App
+  │    ├─ POST /log                          → createLog handler
+  │    ├─ POST /log/:logid                   → appendLog handler
+  │    ├─ GET  /log/:logid/config            → getConfig handler
+  │    ├─ PATCH /log/:logid/config           → setConfig handler
+  │    ├─ GET  /log/:logid/head              → getHead handler
+  │    ├─ GET  /log/:logid/entries           → getEntries handler
+  │    ├─ GET  /version                      → { version, node }
+  │    ├─ GET  /admin/move-new-to-old-hot-log
+  │    └─ GET  /admin/empty-old-hot-log
+  │
+  ├─ Register WebSocket routes
+  │    ├─ /replicatePath (binary, replication protocol)
+  │    └─ /client (text, subscription protocol)
+  │
+  └─ uWS.App().listen(PORT, callback)
+       └─ Ready → incoming requests/WS connections
+```
 
-`src/lib/log/log-stats.ts` imports `ReadIOOperation` from `"../persist/io/read-range-io-operation"`, but that file exports `ReadRangeIOOperation`. The canonical `ReadIOOperation` union type is defined in `globals.ts`. This is a TypeScript module‑resolution issue; the cast `(op as ReadIOOperation).bytesRead` works at runtime only because the imported symbol resolves to the `ReadRangeIOOperation` class, which happens to have a `bytesRead` property. This should be corrected to import from `"../globals"`.
+### 7.3 Route Registration
 
-### 7.3 Inconsistent Checkpoint CRC Computation
+All routes are registered in `src/logsrd.ts`. The uWebSockets.js `TemplatedApp` instance is configured with:
 
-`GlobalLogCheckpoint.cksum()` seeds the CRC-32 computation with the entry type byte via `crc32(this.u8(), crc32(TYPE_BYTE))`, while `LogLogCheckpoint.cksum()` computes `crc32(this.u8())` without any seed. All other entry types (`BinaryLogEntry`, `JSONLogEntry`, `CommandLogEntry`) consistently use the pattern `crc32(data, crc32(TYPE, entryNum))`. The `LogLogCheckpoint` CRC routine should be aligned to use a consistent seeding strategy.
-
-### 7.4 ReadRangeIOOperation ("not implemented")
-
-The `_processReadRangeOp` method in `PersistedLog` throws `new Error("not implemented")`. This operation type is declared in `IOOperationType` and has an associated `ReadRangeIOOperation` class, but no actual implementation exists.
-
-### 7.5 Missing Class Specifications
-
-The following classes exist in the implementation but are not documented in this specification:
-
-- **`U32CommandType`** (`src/lib/entry/command/command-type/u32-command-type.ts`): Command type for 32‑bit unsigned integer values. Extends `CommandLogEntry`.
-- **`StringCommandType`** (`src/lib/entry/command/command-type/string-command-type.ts`): Command type for string values. Extends `CommandLogEntry`.
-
-These have been added to §2.2 in this revision.
-
-### 7.6 Host.lastPing / lastPong (Unused Fields)
-
-The `Host` class declares `lastPing` and `lastPong` properties in the specification, but the implementation does not use them for any health‑check or timeout logic.
-
-### 7.7 Checkpoint Boundary Edge Case
-
-Both `HotLog._processReadLogEntry()` and `LogLog._processReadLogEntry()` check for the case where an entry starts exactly at a checkpoint boundary (`offset === nextCheckpointOffset`) and throw an error. This condition should never occur under normal operation, but if it does, it causes a crash rather than attempting recovery.
-
+- **HTTP routes** — each registered with `app.post(...)`, `app.get(...)`, `app.patch(...)` using uWS lambda handlers that receive `(res, req)`. The `res` object provides `.onAborted()`, `.writeStatus()`, `.writeHeader()`, `.end()`, and `.tryEnd()` for backpressure.
+- **WebSocket routes** — registered with `app.ws(path, { open, message, close, drain })` behaviours. The `/replicatePath` handler expects binary messages (global log entries), while `/client` expects JSON text messages (subscribe/unsubscribe commands).
+- **Admin routes** — unauthenticated test helpers for triggering hot-log compaction cycle outside the normal monitor interval.
+- **Catch-all 404** — registered as `app.any('/*', handler)`.
